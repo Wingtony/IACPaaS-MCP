@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef0f7"><title>Атлас знаний — IACPaaS</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/studio.css"><script src="/static/app.js" defer></script>
+</head>
+<body>
+<svg class="icon-library" aria-hidden="true"><defs>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.2A9 9 0 0 1 9.8 3.5 9 9 0 1 0 20.5 14.2Z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></symbol>
+</defs></svg>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/" aria-label="IACPaaS — главная"><img src="/static/logo.svg" width="42" height="42" alt=""><span><strong>АТЛАС<span class="brand-dot">.</span></strong><small>ЗНАНИЯ · IACPaaS</small></span></a>
+    <button class="new-chat" id="new-chat" title="Новый диалог · Ctrl+Shift+O"><span class="plus-disc"><svg><use href="#i-plus"/></svg></span>Новый диалог<kbd>⇧ O</kbd></button>
+    <label class="search"><svg><use href="#i-search"/></svg><input id="search" placeholder="Поиск по диалогам" aria-label="Поиск по диалогам" autocomplete="off"><kbd>/</kbd></label>
+    <div class="history" id="history"></div>
+    <div class="sidebar-bottom">
+      <div class="workspace-card"><span class="workspace-icon"><svg><use href="#i-database"/></svg></span><div><strong id="workspace-name">Учебное пространство</strong><small id="workspace-description">Демонстрационные данные</small></div><span class="dot" id="mcp-dot"></span></div>
+      <button class="account-button app-power" id="stop-app" title="Остановить веб-сервер, текущие запросы и выгрузить Qwen"><span>■</span><span>Остановить приложение</span></button>
+      <button class="account-button" id="account-settings"><svg><use href="#i-database"/></svg><span>Подключение IACPaaS</span><svg><use href="#i-chevron"/></svg></button>
+      <div class="sidebar-footer"><span class="local-label"><span class="dot"></span>Локально на вашем ПК</span><button class="icon-button" id="theme-toggle" title="Сменить тему" aria-label="Сменить тему"><svg><use href="#i-moon"/></svg></button></div>
+    </div>
+  </aside>
+  <button class="sidebar-overlay" id="sidebar-overlay" aria-label="Закрыть боковую панель"></button>
+  <main class="main">
+    <header class="topbar"><div class="topbar-left"><button class="icon-button" id="sidebar-toggle" title="Боковая панель" aria-label="Боковая панель"><svg><use href="#i-panel"/></svg></button><div class="tabs" role="tablist" aria-label="Разделы"><button class="tab active" id="chat-tab" role="tab" aria-selected="true">Исследование</button><button class="tab" id="data-tab" role="tab" aria-selected="false">Ресурсы<span class="tab-dot"></span></button></div></div><div class="topbar-right"><span class="model-pill"><span class="dot" id="model-dot"></span><span id="model-name">Qwen · локально</span></span><button class="icon-button" id="export" title="Скачать диалог" aria-label="Скачать диалог"><svg><use href="#i-download"/></svg></button><button class="icon-button" id="about" title="О проекте" aria-label="О проекте"><svg><use href="#i-info"/></svg></button></div></header>
+    <section class="chat-view" id="chat-view" aria-label="Диалог с агентом">
+      <div class="scroll-area" id="scroll-area">
+        <section class="welcome" id="welcome">
+          <div class="welcome-intro"><div class="intro-copy">
+          <div class="eyebrow"><span></span>ПРОСТРАНСТВО ДЛЯ ИССЛЕДОВАНИЙ</div>
+          <h1>Исследуйте знания.<br><span>Находите связи.</span></h1>
+          <p class="welcome-description">От одного вопроса — к целой картине.<br> Изучайте ресурсы IACPaaS вместе с вашим ИИ-агентом.</p>
+          <div class="hero-labels"><span>Qwen на вашем ПК</span><span>Ответы по данным</span></div></div>
+          <div class="knowledge-map" aria-hidden="true"><span class="map-caption">СВЯЗАНО БОЛЬШЕ, ЧЕМ КАЖЕТСЯ</span><svg viewBox="0 0 340 250"><g class="map-lines"><path d="M74 66 171 125 272 54M171 125 285 183M171 125 63 199M171 125 164 25M74 66 63 199M272 54 285 183"/></g><g class="map-small"><circle cx="74" cy="66" r="8"/><circle cx="272" cy="54" r="6"/><circle cx="285" cy="183" r="8"/><circle cx="63" cy="199" r="6"/><circle cx="164" cy="25" r="4"/></g><circle class="map-orbit" cx="171" cy="125" r="50"/><circle class="map-center" cx="171" cy="125" r="32"/><path class="map-mark" d="m158 125 10 10 18-21"/><g class="map-labels"><text x="41" y="44">ПОНЯТИЕ</text><text x="245" y="33">ИСТОЧНИК</text><text x="251" y="213">СВЯЗЬ</text><text x="29" y="225">ДАННЫЕ</text></g></svg><span class="map-footer"><span></span>Всё начинается с хорошего вопроса</span></div></div>
+          <div class="suggestions-label">ВЫБЕРИТЕ НАПРАВЛЕНИЕ<span>01 — 08 / возможности агента</span></div>
+          <div class="suggestions" id="suggestions">
+            <button class="suggestion" data-prompt="Какие подключённые базы содержат сведения о материалах, свойствах и веществах? Покажи их названия и описания."><span class="card-top"><svg><use href="#i-grid"/></svg>НАШИ РЕСУРСЫ<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Что знаем о материалах?</strong><small>Справочники, базы свойств и вещества</small></button>
+            <button class="suggestion" data-prompt="Найди по всем подключённым базам сталь 12Х18Н10Т и её химический состав. Покажи только найденные элементы, значения и единицы с источниками."><span class="card-top"><svg><use href="#i-search"/></svg>СОСТАВ СПЛАВА<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Из чего состоит 12Х18Н10Т?</strong><small>Элементы и их содержание в стали</small></button>
+            <button class="suggestion" data-prompt="Сколько марок материалов в классе Бронзы? Покажи первые 10 марок."><span class="card-top"><svg><use href="#i-panel"/></svg>МАРКИ И КЛАССЫ<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Сколько бронз в базе?</strong><small>Полный подсчёт и первые 10 марок</small></button>
+            <button class="suggestion" data-prompt="Покажи 3 материала с наибольшей верхней границей содержания Cr в процентах."><span class="card-top"><svg><use href="#i-database"/></svg>АНАЛИТИКА<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Где больше хрома?</strong><small>Топ-3 по верхней границе Cr</small></button>
+            <button class="suggestion" data-prompt="Найди железо и обозначение Fe в подключённых базах. Какие сведения об элементе и связанных веществах там есть?"><span class="card-top"><svg><use href="#i-info"/></svg>ХИМИЯ<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Всё о железе и Fe</strong><small>Химические элементы и вещества</small></button>
+            <button class="suggestion" data-prompt="Найди понятие твёрдости в базах свойств, терминологическом справочнике и системе единиц. Какие шкалы и обозначения есть в данных?"><span class="card-top"><svg><use href="#i-search"/></svg>ИЗМЕРЕНИЯ<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Как измеряется твёрдость?</strong><small>Свойства, шкалы и обозначения</small></button>
+            <button class="suggestion" data-prompt="Какие синонимы есть у сферической формы частиц металлических порошков в терминологическом справочнике?"><span class="card-top"><svg><use href="#i-check"/></svg>ТЕРМИНЫ<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Сферическая форма частиц</strong><small>Карточка из терминологического справочника</small></button>
+            <button class="suggestion" data-prompt="Какие онтологии подключены? Покажи, какие понятия первого уровня описывают онтология материалов и онтология свойств материалов."><span class="card-top"><svg><use href="#i-grid"/></svg>ОНТОЛОГИИ<svg class="card-arrow"><use href="#i-arrow"/></svg></span><strong>Как связаны наши знания?</strong><small>Структура материалов и их свойств</small></button>
+          </div>
+          <details class="question-library" id="question-library"><summary>Больше вопросов по нашей базе · <span id="question-count">31</span></summary><p>Выберите вопрос, затем отправьте его. Уточнения и отсутствие данных тоже можно проверить.</p><div id="question-groups"></div></details>
+          <div class="welcome-note"><span class="dot"></span><span id="welcome-note">Учебная база подключена. Можно исследовать.</span></div>
+        </section>
+        <div class="messages" id="messages" aria-live="polite"></div>
+      </div>
+      <div class="composer-wrap"><div class="scope-control"><label for="resource-selector">Область поиска</label><select id="resource-selector" title="По умолчанию ищем во всех базах. Выберите одну, только чтобы сузить поиск." aria-label="Область поиска"><option value="">Все подключённые базы</option></select><span id="context-indicator" title="Контекст сжимается приложением, исходные данные сохраняются">Контекст: авто</span></div><div class="connection-notice" id="connection-notice" hidden></div><form class="composer" id="composer"><textarea id="question" rows="1" maxlength="4000" placeholder="Спросите о базе знаний…" aria-label="Вопрос к базе знаний"></textarea><div class="composer-bottom"><span class="agent-state" id="agent-state"><span class="dot"></span><span>Агент готов к работе</span></span><div class="composer-actions"><span class="composer-model" id="composer-model">Qwen 3.8 <span>· локально</span></span><button class="send" id="send" type="submit" title="Отправить · Enter" aria-label="Отправить сообщение"><svg><use href="#i-arrow"/></svg></button><button class="send stop" id="stop" type="button" title="Остановить ответ" aria-label="Остановить ответ" hidden><span></span></button></div></div></form><div class="composer-hint"><span>Enter — отправить <span class="hint-divider">·</span> Shift+Enter — новая строка</span><span id="backend-hint">Учебные данные · MCP</span></div></div>
+    </section>
+    <section class="data-view" id="data-view" hidden><div class="data-heading"><div class="eyebrow">ПОДКЛЮЧЁННОЕ ПРОСТРАНСТВО</div><h1>База <span>знаний</span></h1><p>Информационные ресурсы, доступные вашему агенту.</p></div><div id="resources" class="resources"></div></section>
+  </main>
+</div>
+<dialog id="about-dialog"><div class="dialog-head"><span class="dialog-icon"><svg><use href="#i-spark"/></svg></span><button class="icon-button dialog-close" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><h2>Атлас ваших знаний</h2><p>Локальный агент исследует графовую базу знаний IACPaaS и объясняет результат с помощью вашей Qwen.</p><dl id="about-details"></dl><p class="dialog-footnote">Диалоги сохраняются на этом ПК. После завершения запроса модель выгружается из памяти. Каждое изменение данных требует отдельного подтверждения.</p><button class="primary dialog-close">Понятно</button></dialog>
+<dialog id="account-dialog"><div class="dialog-head"><span class="dialog-icon"><svg><use href="#i-database"/></svg></span><button class="icon-button account-close" aria-label="Закрыть настройки"><svg><use href="#i-close"/></svg></button></div><h2>Подключение IACPaaS</h2><p>Данные входа хранятся на этом ПК, зашифрованные для вашей учётной записи Windows.</p><form id="account-form"><label>Логин<input id="account-username" type="text" autocomplete="username" maxlength="254" required></label><label>Пароль<input id="account-password" type="password" autocomplete="current-password" maxlength="1000" placeholder="Введите новый или оставьте сохранённый"></label><small id="account-status"></small><label>Базы из «Мой Фонд»<textarea id="account-paths" rows="7" placeholder="Папка/Название базы — по одному пути на строке"></textarea></label><p class="dialog-footnote">Пустой пароль сохраняет прежний только для того же логина. При сохранении проверяется вход; менять пароль на самой платформе эта форма не будет. Запись в базы выключена.</p><p class="account-error" id="account-error" hidden></p><button class="primary" type="submit" id="account-save">Сохранить и подключить</button></form></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+</body></html>

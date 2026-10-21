@@ -1,0 +1,17 @@
+.venv/
+.env
+.env.*
+!.env.example
+.local/
+.mcp.json
+guide-extracted.txt
+__pycache__/
+.pytest_cache/
+logs/
+*.pyc
+*.log
+*.sqlite3
+*.sqlite3-*
+*.dpapi
+*.pem
+*.key

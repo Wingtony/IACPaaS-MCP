@@ -1,0 +1,495 @@
+[
+  {
+    "id": "resources",
+    "category": "Обзор",
+    "question": "Какие информационные ресурсы подключены?",
+    "plan": {
+      "operation": "resources"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [],
+      "total": 8
+    }
+  },
+  {
+    "id": "steel",
+    "category": "Состав",
+    "question": "Покажи химический состав стали 12Х18Н10Т.",
+    "plan": {
+      "operation": "composition",
+      "subject": "12Х18Н10Т"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "66.7",
+        "19.0",
+        "5.0·C"
+      ],
+      "total": 10
+    }
+  },
+  {
+    "id": "bronze",
+    "category": "Состав",
+    "question": "Какой состав у БрАМц9-2?",
+    "plan": {
+      "operation": "composition",
+      "subject": "БрАМц9-2"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "БрАМц9-2"
+      ]
+    }
+  },
+  {
+    "id": "nickel-alloy",
+    "category": "Состав",
+    "question": "Покажи состав ХН58В.",
+    "plan": {
+      "operation": "composition",
+      "subject": "ХН58В"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "ХН58В",
+        "41.0"
+      ]
+    }
+  },
+  {
+    "id": "compare",
+    "category": "Сравнение",
+    "question": "Сравни составы 12Х18Н10Т и ХН58В.",
+    "plan": {
+      "operation": "compare",
+      "subject": "12Х18Н10Т;ХН58В"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "12Х18Н10Т",
+        "ХН58В"
+      ]
+    }
+  },
+  {
+    "id": "iron",
+    "category": "Элементы",
+    "question": "Какие сведения есть о железе (Fe) в химической базе?",
+    "plan": {
+      "operation": "element",
+      "subject": "Fe"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Fe",
+        "26"
+      ]
+    }
+  },
+  {
+    "id": "chromium",
+    "category": "Элементы",
+    "question": "Какие сведения есть о хроме (Cr) в химической базе?",
+    "plan": {
+      "operation": "element",
+      "subject": "Cr"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Cr",
+        "24"
+      ]
+    }
+  },
+  {
+    "id": "nickel",
+    "category": "Элементы",
+    "question": "Какие сведения есть о никеле (Ni) в химической базе?",
+    "plan": {
+      "operation": "element",
+      "subject": "Ni"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Ni",
+        "28"
+      ]
+    }
+  },
+  {
+    "id": "aluminium",
+    "category": "Элементы",
+    "question": "Какие сведения есть о алюминии (Al) в химической базе?",
+    "plan": {
+      "operation": "element",
+      "subject": "Al"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Al",
+        "13"
+      ]
+    }
+  },
+  {
+    "id": "copper",
+    "category": "Элементы",
+    "question": "Какие сведения есть о меди (Cu) в химической базе?",
+    "plan": {
+      "operation": "element",
+      "subject": "Cu"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Cu",
+        "29"
+      ]
+    }
+  },
+  {
+    "id": "hardness",
+    "category": "Свойства",
+    "question": "Что такое твёрдость и какие шкалы есть в базе?",
+    "plan": {
+      "operation": "property",
+      "subject": "Твердость"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "HB",
+        "HV",
+        "HRC"
+      ]
+    }
+  },
+  {
+    "id": "elastic",
+    "category": "Свойства",
+    "question": "Что в базе сказано о модуле упругости?",
+    "plan": {
+      "operation": "property",
+      "subject": "Модуль упругости"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Модуль упругости"
+      ]
+    }
+  },
+  {
+    "id": "melting",
+    "category": "Свойства",
+    "question": "Покажи описание температуры плавления из базы свойств.",
+    "plan": {
+      "operation": "property",
+      "subject": "Температура плавления"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Температура плавления"
+      ]
+    }
+  },
+  {
+    "id": "sphere",
+    "category": "Термины",
+    "question": "Какие синонимы есть у сферической формы частиц металлических порошков?",
+    "plan": {
+      "operation": "term",
+      "subject": "Типовые формы частиц металлических порошков/сферическая"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "круглая",
+        "шаровая"
+      ]
+    }
+  },
+  {
+    "id": "bronze-count",
+    "category": "Подсчёты",
+    "question": "Сколько марок бронз в базе? Покажи первые 10.",
+    "plan": {
+      "operation": "materials",
+      "class_name": "Бронзы",
+      "limit": 10
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [],
+      "total": 6
+    }
+  },
+  {
+    "id": "material-count",
+    "category": "Подсчёты",
+    "question": "Сколько всего марок материалов? Покажи первые 5.",
+    "plan": {
+      "operation": "materials",
+      "limit": 5
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [],
+      "total": 1334
+    }
+  },
+  {
+    "id": "iron-alloys",
+    "category": "Подсчёты",
+    "question": "Какие марки входят в класс Сплавы на основе железа? Покажи первые 5.",
+    "plan": {
+      "operation": "materials",
+      "class_name": "Сплавы на основе железа",
+      "limit": 5
+    },
+    "expected": {
+      "status": "ok",
+      "contains": []
+    }
+  },
+  {
+    "id": "rank-cr-upper",
+    "category": "Рейтинги",
+    "question": "Покажи 3 материала с наибольшей верхней границей содержания Cr.",
+    "plan": {
+      "operation": "rank",
+      "element": "Cr",
+      "bound": "upper",
+      "limit": 3
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "ХН58В"
+      ],
+      "total": 994
+    }
+  },
+  {
+    "id": "rank-cr-lower",
+    "category": "Рейтинги",
+    "question": "Покажи 3 материала с наибольшей нижней границей содержания Cr.",
+    "plan": {
+      "operation": "rank",
+      "element": "Cr",
+      "bound": "lower",
+      "limit": 3
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "ХН58В"
+      ]
+    }
+  },
+  {
+    "id": "rank-ni",
+    "category": "Рейтинги",
+    "question": "Какие 5 материалов имеют наибольшую верхнюю границу содержания Ni?",
+    "plan": {
+      "operation": "rank",
+      "element": "Ni",
+      "bound": "upper",
+      "limit": 5
+    },
+    "expected": {
+      "status": "ok",
+      "contains": []
+    }
+  },
+  {
+    "id": "filter-cr",
+    "category": "Фильтры",
+    "question": "Какие материалы содержат Cr не более 19 процентов по всему допустимому диапазону? Покажи первые 5.",
+    "plan": {
+      "operation": "filter",
+      "element": "Cr",
+      "comparator": "le",
+      "threshold": 19,
+      "limit": 5
+    },
+    "expected": {
+      "status": "ok",
+      "contains": []
+    }
+  },
+  {
+    "id": "filter-ni",
+    "category": "Фильтры",
+    "question": "Какие материалы содержат Ni не менее 9 процентов по всему допустимому диапазону? Покажи первые 5.",
+    "plan": {
+      "operation": "filter",
+      "element": "Ni",
+      "comparator": "ge",
+      "threshold": 9,
+      "limit": 5
+    },
+    "expected": {
+      "status": "ok",
+      "contains": []
+    }
+  },
+  {
+    "id": "ontology-pair",
+    "category": "Онтологии",
+    "question": "Какие онтологии подключены? Покажи понятия первого уровня онтологии материалов и онтологии свойств материалов.",
+    "plan": {
+      "operation": "structure",
+      "subject": "онтология материалов; онтология свойств материалов"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Класс материалов",
+        "Класс свойств"
+      ],
+      "total": 2
+    }
+  },
+  {
+    "id": "ontology-all",
+    "category": "Онтологии",
+    "question": "Покажи понятия первого уровня всех подключённых онтологий.",
+    "plan": {
+      "operation": "structure",
+      "subject": "онтологии"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Характеристика"
+      ],
+      "total": 5
+    }
+  },
+  {
+    "id": "unclear-rank",
+    "category": "Рейтинги",
+    "question": "Где больше хрома?",
+    "plan": {
+      "operation": "rank",
+      "element": "Cr",
+      "bound": "upper",
+      "bound_inferred": true
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "верхней допустимой",
+        "ХН58В"
+      ],
+      "total": 994
+    }
+  },
+  {
+    "id": "two-filters",
+    "category": "Уточнения",
+    "question": "Найди материалы с Cr не более 19% и Ni не менее 9%.",
+    "plan": {
+      "operation": "clarify",
+      "clarification": "compound"
+    },
+    "expected": {
+      "status": "clarify",
+      "contains": [
+        "несколько"
+      ]
+    }
+  },
+  {
+    "id": "density",
+    "category": "Уточнения",
+    "question": "Какая плотность у алюминия?",
+    "plan": {
+      "operation": "clarify",
+      "clarification": "property"
+    },
+    "expected": {
+      "status": "clarify",
+      "contains": [
+        "измеренную"
+      ]
+    }
+  },
+  {
+    "id": "unknown",
+    "category": "Нет данных",
+    "question": "Покажи состав марки НЕСУЩЕСТВУЮЩАЯ-МАРКА-000.",
+    "plan": {
+      "operation": "composition",
+      "subject": "НЕСУЩЕСТВУЮЩАЯ-МАРКА-000"
+    },
+    "expected": {
+      "status": "not_found",
+      "contains": [
+        "не найдена"
+      ]
+    }
+  },
+  {
+    "id": "al-count",
+    "category": "Подсчёты",
+    "question": "Сколько марок Al в базе? Покажи первые 10.",
+    "plan": {
+      "operation": "materials",
+      "class_name": "Al"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Сплавы на основе алюминия"
+      ],
+      "total": 186
+    }
+  },
+  {
+    "id": "cr-count",
+    "category": "Подсчёты",
+    "question": "Сколько материалов содержат Cr?",
+    "plan": {
+      "operation": "materials",
+      "element": "Cr"
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "Cr"
+      ],
+      "total": 994
+    }
+  },
+  {
+    "id": "ni-min",
+    "category": "Фильтры",
+    "question": "Покажи 5 материалов с Ni не менее 9%.",
+    "plan": {
+      "operation": "filter",
+      "element": "Ni",
+      "comparator": "ge",
+      "threshold": 9,
+      "limit": 5
+    },
+    "expected": {
+      "status": "ok",
+      "contains": [
+        "≥ 9.0%"
+      ]
+    }
+  }
+]

@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "IACPaaS: веб-интерфейс",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "iacpaas_mcp.web", "--open-browser"],
+      "options": {"cwd": "${workspaceFolder}", "env": {"PYTHONUTF8": "1"}},
+      "dependsOn": "IACPaaS: запустить Qwen",
+      "problemMatcher": []
+    },
+    {
+      "label": "IACPaaS: запустить Qwen",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/Start-Ollama.ps1"],
+      "problemMatcher": []
+    },
+    {
+      "label": "IACPaaS: спросить Qwen",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "iacpaas_mcp.agent", "${input:question}"],
+      "options": {"cwd": "${workspaceFolder}", "env": {"PYTHONUTF8": "1"}},
+      "dependsOn": "IACPaaS: запустить Qwen",
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated"}
+    },
+    {
+      "label": "IACPaaS: тесты",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "pytest", "-q"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "IACPaaS: HTTP MCP",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "iacpaas_mcp.server", "--transport", "streamable-http"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [{"id": "question", "type": "promptString", "description": "Вопрос к базе IACPaaS", "default": "Сколько вершин и дуг в учебной базе?"}]
+}
