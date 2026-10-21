@@ -59,15 +59,20 @@ async def unload_model(model, ollama_url):
 
 
 async def run_agent(client, question, model, ollama_url, trace_file, max_steps=12, approve=None,
-                    history=None, on_event=None, resource_path="", mode="knowledge"):
+                    history=None, on_event=None, resource_path="", mode="knowledge", llm_config=None):
+    from .llm import get_config
+    llm_config = llm_config or get_config(default_model=model)
+    model = llm_config.model
+    if llm_config.cloud and mode != "knowledge":
+        raise ValueError("Облачные модели поддерживаются в режиме предметного планировщика")
     try:
         if mode == "knowledge":
             from .planner_agent import run_planned_agent
-            return await run_planned_agent(client, question, model, ollama_url, trace_file, history, on_event, resource_path)
+            return await run_planned_agent(client, question, model, ollama_url, trace_file, history, on_event, resource_path, llm_config=llm_config)
         return await _run_agent(client, question, model, ollama_url, trace_file, max_steps,
                                 approve, history, on_event, resource_path)
     finally:
-        if os.getenv("AGENT_UNLOAD_AFTER_REQUEST", "false").lower() == "true":
+        if not llm_config.cloud and os.getenv("AGENT_UNLOAD_AFTER_REQUEST", "false").lower() == "true":
             await unload_model(model, ollama_url)
 
 
@@ -231,6 +236,8 @@ async def _run_agent(client, question, model, ollama_url, trace_file, max_steps=
 
 
 async def main_async(args):
+    from .llm import get_config
+    selected = get_config(provider=args.provider, model=args.model)
     trace = PROJECT / "logs" / ("agent-" + uuid.uuid4().hex[:10] + ".jsonl")
     if args.mcp_url:
         import httpx2
@@ -240,12 +247,12 @@ async def main_async(args):
             raise ValueError("Для HTTP задайте MCP_BEARER_TOKEN")
         async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + token}) as http:
             async with Client(streamable_http_client(args.mcp_url, http_client=http)) as client:
-                answer = await run_agent(client, args.question, args.model, args.ollama_url, trace)
+                answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected)
     else:
         params = StdioServerParameters(command=sys.executable, args=["-m", "iacpaas_mcp.server"],
                                        cwd=str(PROJECT), env=dict(os.environ))
         async with Client(params) as client:
-            answer = await run_agent(client, args.question, args.model, args.ollama_url, trace)
+            answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected)
     print(answer)
     print(f"\nТрасса: {trace}", file=sys.stderr)
 
@@ -256,7 +263,8 @@ def main():
     load_dotenv(PROJECT / ".env")
     parser = argparse.ArgumentParser()
     parser.add_argument("question", nargs="?", default="Какие базы доступны? Посчитай вершины и дуги в первой базе.")
-    parser.add_argument("--model", default=os.getenv("OLLAMA_MODEL", "qwen-agent"))
+    parser.add_argument("--provider", choices=["ollama","openai","anthropic","gemini","deepseek","openrouter"], default=None)
+    parser.add_argument("--model", default=None)
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--mcp-url", default="")
     args = parser.parse_args()

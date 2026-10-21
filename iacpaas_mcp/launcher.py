@@ -19,7 +19,7 @@ def main():
     window.configure(bg="#1d223a")
     status=tk.StringVar(value="Web уже работает" if healthy() else "Приложение остановлено")
     tk.Label(window,text="АТЛАС. Знания",font=("Segoe UI",22,"bold"),fg="white",bg="#1d223a").pack(pady=(22,5))
-    tk.Label(window,text="Веб-интерфейс и локальная Qwen",font=("Segoe UI",11),fg="#bfc6e5",bg="#1d223a").pack()
+    tk.Label(window,text="Веб-интерфейс и выбранная модель",font=("Segoe UI",11),fg="#bfc6e5",bg="#1d223a").pack()
     tk.Label(window,textvariable=status,font=("Segoe UI",10),fg="#d9ddf4",bg="#1d223a",wraplength=430,height=3).pack(pady=12)
     frame=tk.Frame(window,bg="#1d223a");frame.pack()
     buttons=[]

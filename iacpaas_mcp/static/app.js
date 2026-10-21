@@ -91,7 +91,7 @@ function stepsHTML(steps, busy = false) {
   }).join('')}</details>`;
 }
 function planHTML(report){if(!report?.query_plan)return '';const p=report.query_plan;const names={resources:'Список ресурсов',structure:'Структура баз',materials:'Марки и количество',composition:'Химический состав',element:'Химический элемент',property:'Описание свойства',term:'Карточка термина',rank:'Рейтинг материалов',filter:'Отбор материалов',compare:'Сравнение состава',clarify:'Нужно уточнение'};const detail=[p.subject,p.class_name,p.element].filter(Boolean).join(' · ');return `<div class="interpreted-query">${escapeHTML(names[p.operation]||p.operation)}${detail ? ' · '+escapeHTML(detail):''}</div>`;}
-function assistantHeading() { return '<div class="assistant-heading"><img src="/static/logo.svg" alt="">IACPaaS<span><small>QWEN</small></span></div>'; }
+function assistantHeading(model = config.model) { return '<div class="assistant-heading"><img src="/static/logo.svg" alt="">IACPaaS<span><small>'+escapeHTML(model || 'QWEN')+'</small></span></div>'; }
 function verificationHTML(report) {
   if(report?.status==='verified_result' && report.rows===0) report={...report,status:'empty_result'};
   if (!report?.status) report={status:'not_verified',scope:'',notice:'Для этого исторического ответа проверка не выполнялась. Повторите вопрос, чтобы получить ссылки на снимок базы.'};
@@ -111,7 +111,7 @@ function renderMessages() {
       edit.onclick=async()=>{try{const text=message.content;const branch=await api('/api/chats/'+current.id+'/branch',{method:'POST',body:JSON.stringify({index:messageIndex})});await selectChat(branch.id);$('question').value=text;$('question').style.height='auto';$('question').focus();setState('Агент готов к работе');await refreshHistory();toast('Создана ветка. Исправьте вопрос и отправьте.');}catch(error){toast(error.message)}};
       article.append(edit); }
     else {
-      article.innerHTML = assistantHeading() + planHTML(message.verification) + stepsHTML(message.steps || []) + `<div class="${message.status === 'error' ? 'error-message' : 'answer'}">${markdown(message.content)}</div>` + verificationHTML(message.verification);
+      article.innerHTML = assistantHeading(message.model) + planHTML(message.verification) + stepsHTML(message.steps || []) + `<div class="${message.status === 'error' ? 'error-message' : 'answer'}">${markdown(message.content)}</div>` + verificationHTML(message.verification);
       const footer = document.createElement('div'); footer.className = 'message-footer';
       const tokens = message.metrics?.tokens_out; footer.innerHTML = `<span>${message.seconds ?? 0} с</span>${tokens ? `<span>${tokens.toLocaleString('ru')} ${message.verification?.query_plan ? 'токенов плана' : 'токенов ответа'}</span>` : ''}<span>Вызовы MCP: ${(message.steps || []).length}</span>${message.context?.compressed ? `<span>Контекст сжат: ≈${message.context.before_estimate} → ≈${message.context.after_estimate}</span>` : ''}`;
       const copy = document.createElement('button'); copy.className = 'copy-button'; copy.innerHTML = icon('copy') + 'Копировать'; copy.onclick = () => navigator.clipboard.writeText(message.content).then(() => toast('Ответ скопирован')).catch(() => toast('Не удалось скопировать ответ'));
@@ -120,7 +120,7 @@ function renderMessages() {
     $('messages').append(article);
   }
 }
-function renderPending(label = 'Qwen готовит ответ') {
+function renderPending(label = 'Модель готовит ответ') {
   if (!pending) return;
   pending.element.innerHTML = assistantHeading() + stepsHTML(pending.steps, true) + `<div class="thinking-line"><span class="thinking-dots"><span></span><span></span><span></span></span><span>${escapeHTML(label)}</span></div>`;
   follow();
@@ -138,7 +138,7 @@ function connectRun(id) {
     if (event.event === 'tool') {
       const index = pending.steps.findLastIndex(step => step.name === event.name && !step.result);
       if (index >= 0) pending.steps[index] = event; else pending.steps.push(event);
-      renderPending('Qwen готовит ответ по данным базы');
+      renderPending('Модель готовит ответ по данным базы');
     }
     if (event.event === 'approval') showApproval(event);
     if (event.event === 'context') { $('context-indicator').textContent=event.compressed ? `Сжато: ≈${event.before_estimate} → ≈${event.after_estimate}` : `Контекст: ≈${event.after_estimate} / ${event.budget}${event.context_length ? ' · окно '+Math.round(event.context_length/1024)+'K' : ''}`; }
@@ -169,7 +169,7 @@ function showApproval(event) {
 async function sendMessage(event) {
   event?.preventDefault(); if (runId || submitting) return;
   const message = $('question').value.trim(); if (!message) return;
-  if (!config.model_available) { toast('Qwen недоступен. Запустите Start-Web.cmd и обновите страницу.'); return; }
+  if (!config.model_available) { toast('Модель недоступна. Проверьте настройки моделей и API или запуск Ollama.'); return; }
   submitting = true; $('send').disabled = true;
   try {
     if (!current) { current = await api('/api/chats', {method:'POST',body:'{}'}); localStorage.setItem('iacpaas-chat',current.id); }
@@ -210,15 +210,15 @@ async function openAccountSettings(){
 async function refreshStatus(){
   config=await api('/api/status');csrf=config.csrf;
   if(!current && !runId && config.context_length)$('context-indicator').textContent=`Контекст: ${config.context_length/1024}K · бюджет ≈${config.context_budget}`;
-  $('model-name').textContent=config.model;$('composer-model').textContent=config.model+' · локально';
+  $('model-name').textContent=config.model;document.getElementById('model-location').textContent=config.cloud?'Облачный API':'Qwen на вашем ПК';$('composer-model').textContent=config.model+(config.cloud?' · облако':' · локально');
   $('model-dot').classList.toggle('offline',!config.model_available);
   const mock=config.backend==='mock';
   $('workspace-name').textContent=mock?'Учебное пространство':'Фонд IACPaaS';$('workspace-description').textContent=mock?'Демонстрационные данные':'Ресурсы из конфигурации';
   $('welcome-note').textContent=mock?'Учебная база подключена. Можно исследовать.':'Настроено подключение к IACPaaS. Данные проверяются при запросе.';
   $('backend-hint').textContent=(mock?'Учебные данные':'IACPaaS')+` · MCP ${config.tools}`;
   $('connection-notice').hidden=config.model_available;
-  $('connection-notice').textContent='Qwen выключена. Чтобы начать диалог, запустите Start-Web.cmd.';
-  setState(runId?'Агент работает':config.model_available?'Агент готов к работе':'Модель выключена',!!runId);
+  $('connection-notice').textContent=config.cloud?'Для облачной модели сохраните API-ключ в разделе «Модели и API».':'Qwen выключена. Чтобы начать диалог, запустите Start-Web.cmd.';
+  setState(runId?'Агент работает':config.model_available?(config.cloud?'Облако настроено · доступ не проверен':'Агент готов к работе'):'Модель выключена',!!runId);
 }
 $('new-chat').onclick=resetChat;$('search').oninput=history;$('composer').onsubmit=sendMessage;
 $('question').oninput=()=>{const el=$('question');el.style.height='auto';el.style.height=Math.min(el.scrollHeight,140)+'px';$('send').disabled=!el.value.trim()||!config.model_available;};
@@ -229,7 +229,7 @@ $('chat-tab').onclick=()=>showPage('chat');$('data-tab').onclick=()=>showPage('d
 $('sidebar-toggle').onclick=()=>{if(innerWidth<=760)document.body.classList.toggle('mobile-open');else document.body.classList.toggle('sidebar-collapsed');};
 $('sidebar-overlay').onclick=closeSidebar;
 $('theme-toggle').onclick=()=>theme(document.documentElement.dataset.theme==='dark'?'light':'dark');
-$('about').onclick=()=>{const values=[['Модель',config.model||'—'],['Среда','Локальная Ollama'],['Контекст модели',config.context_length||'—'],['Бюджет входа',config.context_budget||'—'],['Лимит генерации',config.output_limit||'—'],['Данные',config.backend==='mock'?'Учебный граф':'IACPaaS REST'],['MCP-инструменты',config.tools||'—'],['Запись',config.write_enabled?'С подтверждением':'Отключена'],['История','На этом компьютере']];$('about-details').innerHTML=values.map(([key,value])=>`<dt>${key}</dt><dd>${escapeHTML(value)}</dd>`).join('');$('about-dialog').showModal();};
+$('about').onclick=()=>{const values=[['Модель',config.model||'—'],['Среда',config.cloud?config.provider+' · облачный API':'Локальная Ollama'],['Окно приложения',config.context_length||'—'],['Бюджет входа',config.context_budget||'—'],['Лимит генерации',config.output_limit||'—'],['Данные',config.backend==='mock'?'Учебный граф':'IACPaaS REST'],['MCP-инструменты',config.tools||'—'],['Запись',config.write_enabled?'С подтверждением':'Отключена'],['История','На этом компьютере']];$('about-details').innerHTML=values.map(([key,value])=>`<dt>${key}</dt><dd>${escapeHTML(value)}</dd>`).join('');$('about-dialog').showModal();};
 document.querySelectorAll('.dialog-close').forEach(button=>button.onclick=()=>$('about-dialog').close());
 $('export').onclick=()=>{if(!current?.messages.length){toast('Сначала начните диалог');return;}const text='# '+current.title+'\n\n'+current.messages.map(message=>`## ${message.role==='user'?'Вы':'IACPaaS'}\n\n${message.content}`).join('\n\n');const url=URL.createObjectURL(new Blob([text],{type:'text/markdown;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='IACPaaS-'+current.id.slice(0,8)+'.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.shiftKey&&event.key.toLowerCase()==='o'){event.preventDefault();resetChat();}if(event.key==='/'&&!['INPUT','TEXTAREA'].includes(document.activeElement.tagName)){event.preventDefault();$('search').focus();}});
@@ -250,3 +250,42 @@ async function loadQuestionBank(){
   $('question-groups').onclick=event=>{const button=event.target.closest('[data-prompt]');if(button){$('question').value=button.dataset.prompt;$('question').dispatchEvent(new Event('input'));$('question').focus();toast('Вопрос подготовлен. Нажмите Enter для отправки.');}};
 }
 loadQuestionBank().catch(()=>{});
+
+let modelSettings = null;
+function modelFields() {
+  const item=modelSettings.providers.find(p=>p.id===$('llm-provider').value);
+  const local=item.id==='ollama';
+  $('llm-model-list').innerHTML=item.models.map(model=>`<option value="${escapeHTML(model)}"></option>`).join('');
+  $('llm-model').value=item.id===modelSettings.provider?modelSettings.model:(item.saved_model||item.models[0]);
+  $('llm-key').value='';$('llm-delete-key').checked=false;$('llm-key').disabled=local;$('llm-delete-key').disabled=local;
+  $('llm-key-status').textContent=local?'Ollama работает без API-ключа.':item.key_source==='environment'?'Ключ задан переменной окружения. Она имеет приоритет; удаление здесь затронет только сохранённую копию.':item.key_saved?'Ключ сохранён на сервере. Пустое поле оставит его прежним.':'Ключ ещё не сохранён.';
+  $('llm-disclosure').hidden=local;$('llm-error').hidden=true;$('llm-test-result').textContent='';
+  $('llm-check').disabled=local||item.id!==modelSettings.provider;
+}
+async function openModelSettings() {
+  try {
+    modelSettings=await api('/api/llm');
+    $('llm-provider').innerHTML=modelSettings.providers.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('');
+    $('llm-provider').value=modelSettings.provider;modelFields();$('model-dialog').showModal();
+  } catch(error){toast(error.message);}
+}
+$('model-settings').onclick=openModelSettings;
+$('model-name').parentElement.style.cursor='pointer';
+$('model-name').parentElement.onclick=openModelSettings;
+$('llm-provider').onchange=modelFields;
+document.querySelectorAll('.model-close').forEach(button=>button.onclick=()=>$('model-dialog').close());
+$('model-dialog').addEventListener('close',()=>{$('llm-key').value='';});
+$('model-form').onsubmit=async event=>{
+  event.preventDefault();$('llm-save').disabled=true;$('llm-error').hidden=true;
+  try {
+    modelSettings=await api('/api/llm',{method:'POST',body:JSON.stringify({provider:$('llm-provider').value,model:$('llm-model').value.trim(),api_key:$('llm-key').value.trim(),delete_key:$('llm-delete-key').checked})});
+    $('llm-key').value='';modelFields();await refreshStatus();$('question').dispatchEvent(new Event('input'));toast('Модель сохранена');
+  } catch(error){$('llm-error').hidden=false;$('llm-error').textContent=error.message;}
+  finally{$('llm-save').disabled=false;}
+};
+$('llm-check').onclick=async()=>{
+  $('llm-check').disabled=true;$('llm-test-result').textContent='Проверяю сохранённую модель…';
+  try {const result=await api('/api/llm/check',{method:'POST',body:'{}'});$('llm-test-result').textContent=`API отвечает: ${result.model}. Токены: ${result.tokens_in} вход / ${result.tokens_out} выход.`;}
+  catch(error){$('llm-test-result').textContent=error.message;}
+  finally{$('llm-check').disabled=false;}
+};

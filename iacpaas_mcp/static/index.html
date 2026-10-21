@@ -29,6 +29,7 @@
 <div class="app">
   <aside class="sidebar" id="sidebar">
     <a class="brand" href="/" aria-label="IACPaaS — главная"><img src="/static/logo.svg" width="42" height="42" alt=""><span><strong>АТЛАС<span class="brand-dot">.</span></strong><small>ЗНАНИЯ · IACPaaS</small></span></a>
+    <button type="button" class="model-settings-button" id="model-settings">Модели и API</button>
     <button class="new-chat" id="new-chat" title="Новый диалог · Ctrl+Shift+O"><span class="plus-disc"><svg><use href="#i-plus"/></svg></span>Новый диалог<kbd>⇧ O</kbd></button>
     <label class="search"><svg><use href="#i-search"/></svg><input id="search" placeholder="Поиск по диалогам" aria-label="Поиск по диалогам" autocomplete="off"><kbd>/</kbd></label>
     <div class="history" id="history"></div>
@@ -49,7 +50,7 @@
           <div class="eyebrow"><span></span>ПРОСТРАНСТВО ДЛЯ ИССЛЕДОВАНИЙ</div>
           <h1>Исследуйте знания.<br><span>Находите связи.</span></h1>
           <p class="welcome-description">От одного вопроса — к целой картине.<br> Изучайте ресурсы IACPaaS вместе с вашим ИИ-агентом.</p>
-          <div class="hero-labels"><span>Qwen на вашем ПК</span><span>Ответы по данным</span></div></div>
+          <div class="hero-labels"><span id="model-location">Qwen на вашем ПК</span><span>Ответы по данным</span></div></div>
           <div class="knowledge-map" aria-hidden="true"><span class="map-caption">СВЯЗАНО БОЛЬШЕ, ЧЕМ КАЖЕТСЯ</span><svg viewBox="0 0 340 250"><g class="map-lines"><path d="M74 66 171 125 272 54M171 125 285 183M171 125 63 199M171 125 164 25M74 66 63 199M272 54 285 183"/></g><g class="map-small"><circle cx="74" cy="66" r="8"/><circle cx="272" cy="54" r="6"/><circle cx="285" cy="183" r="8"/><circle cx="63" cy="199" r="6"/><circle cx="164" cy="25" r="4"/></g><circle class="map-orbit" cx="171" cy="125" r="50"/><circle class="map-center" cx="171" cy="125" r="32"/><path class="map-mark" d="m158 125 10 10 18-21"/><g class="map-labels"><text x="41" y="44">ПОНЯТИЕ</text><text x="245" y="33">ИСТОЧНИК</text><text x="251" y="213">СВЯЗЬ</text><text x="29" y="225">ДАННЫЕ</text></g></svg><span class="map-footer"><span></span>Всё начинается с хорошего вопроса</span></div></div>
           <div class="suggestions-label">ВЫБЕРИТЕ НАПРАВЛЕНИЕ<span>01 — 08 / возможности агента</span></div>
           <div class="suggestions" id="suggestions">
@@ -72,7 +73,25 @@
     <section class="data-view" id="data-view" hidden><div class="data-heading"><div class="eyebrow">ПОДКЛЮЧЁННОЕ ПРОСТРАНСТВО</div><h1>База <span>знаний</span></h1><p>Информационные ресурсы, доступные вашему агенту.</p></div><div id="resources" class="resources"></div></section>
   </main>
 </div>
-<dialog id="about-dialog"><div class="dialog-head"><span class="dialog-icon"><svg><use href="#i-spark"/></svg></span><button class="icon-button dialog-close" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><h2>Атлас ваших знаний</h2><p>Локальный агент исследует графовую базу знаний IACPaaS и объясняет результат с помощью вашей Qwen.</p><dl id="about-details"></dl><p class="dialog-footnote">Диалоги сохраняются на этом ПК. После завершения запроса модель выгружается из памяти. Каждое изменение данных требует отдельного подтверждения.</p><button class="primary dialog-close">Понятно</button></dialog>
+<dialog id="about-dialog"><div class="dialog-head"><span class="dialog-icon"><svg><use href="#i-spark"/></svg></span><button class="icon-button dialog-close" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><h2>Атлас ваших знаний</h2><p>Агент исследует графовую базу IACPaaS с помощью выбранной локальной или облачной модели.</p><dl id="about-details"></dl><p class="dialog-footnote">Диалоги сохраняются на этом ПК. Локальная модель остаётся в памяти до остановки приложения. В облачном режиме вопрос, история и каталог понятий передаются выбранному провайдеру. Каждое изменение данных требует отдельного подтверждения.</p><button class="primary dialog-close">Понятно</button></dialog>
 <dialog id="account-dialog"><div class="dialog-head"><span class="dialog-icon"><svg><use href="#i-database"/></svg></span><button class="icon-button account-close" aria-label="Закрыть настройки"><svg><use href="#i-close"/></svg></button></div><h2>Подключение IACPaaS</h2><p>Данные входа хранятся на этом ПК, зашифрованные для вашей учётной записи Windows.</p><form id="account-form"><label>Логин<input id="account-username" type="text" autocomplete="username" maxlength="254" required></label><label>Пароль<input id="account-password" type="password" autocomplete="current-password" maxlength="1000" placeholder="Введите новый или оставьте сохранённый"></label><small id="account-status"></small><label>Базы из «Мой Фонд»<textarea id="account-paths" rows="7" placeholder="Папка/Название базы — по одному пути на строке"></textarea></label><p class="dialog-footnote">Пустой пароль сохраняет прежний только для того же логина. При сохранении проверяется вход; менять пароль на самой платформе эта форма не будет. Запись в базы выключена.</p><p class="account-error" id="account-error" hidden></p><button class="primary" type="submit" id="account-save">Сохранить и подключить</button></form></dialog>
 <div class="toast" id="toast" role="status" hidden></div>
+<dialog id="model-dialog" aria-labelledby="model-dialog-title">
+  <div class="dialog-head"><span class="dialog-icon"><svg><use href="#i-spark"/></svg></span><button type="button" class="icon-button model-close" aria-label="Закрыть модели"><svg><use href="#i-close"/></svg></button></div>
+  <h2 id="model-dialog-title">Модели и API</h2>
+  <p>Выберите локальную Qwen или подключите облачную модель. Ответы по базе проходят ту же проверку MCP.</p>
+  <form id="model-form">
+    <label>Провайдер<select id="llm-provider"></select></label>
+    <label>API ID модели<input id="llm-model" list="llm-model-list" maxlength="150" required autocomplete="off"><datalist id="llm-model-list"></datalist></label>
+    <small>Можно выбрать пример или ввести точный ID модели из вашего аккаунта.</small>
+    <label>API-ключ<input id="llm-key" type="password" autocomplete="off" maxlength="4096" placeholder="Новый ключ или оставьте сохранённый"></label>
+    <small id="llm-key-status"></small>
+    <label class="delete-key-label"><input id="llm-delete-key" type="checkbox">Удалить сохранённый ключ этого провайдера</label>
+    <p class="cloud-disclosure" id="llm-disclosure">В облако передаются вопрос, сжатая история (включая предыдущие ответы) и каталог понятий базы. API оплачивается по тарифу провайдера. Ключ хранится на этом ПК через Windows DPAPI и не возвращается браузеру.</p>
+    <p class="account-error" id="llm-error" hidden></p>
+    <p id="llm-test-result" role="status"></p>
+    <div class="llm-buttons"><button type="submit" class="primary" id="llm-save">Сохранить выбор</button><button type="button" id="llm-check">Проверить сохранённую модель</button></div>
+    <small>Проверка выполняет короткий платный API-запрос без данных базы. Доступность не проверяется автоматически при сохранении.</small>
+  </form>
+</dialog>
 </body></html>
