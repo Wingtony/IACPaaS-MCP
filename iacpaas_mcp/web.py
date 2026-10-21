@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from .agent import run_agent, unload_model
 from .context import context_settings
@@ -27,6 +28,7 @@ from .server import PROJECT, build_server
 from .provenance import SNAPSHOTS
 from .auth import connect_account
 from .credentials import account_status
+from .llm import get_config, public_settings, save_settings, complete
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -83,6 +85,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         run["changed"].set()
 
     async def execute(run):
+        selected = run["llm_config"]
         chat = store.get(run["chat_id"])
         started = time.monotonic()
         steps = []
@@ -122,10 +125,10 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
                 history = [{"role": message["role"], "content": message["content"], "query_plan":message.get("verification",{}).get("query_plan"),"selection":message.get("verification",{}).get("selection",[])}
                            for message in chat["messages"][:-1] if message.get("status", "done") == "done"]
                 async with Client(mcp) as client:
-                    answer = await run_agent(client, chat["messages"][-1]["content"], model, ollama_url,
+                    answer = await run_agent(client, chat["messages"][-1]["content"], selected.model, ollama_url,
                                              PROJECT / "logs" / ("web-" + run["id"] + ".jsonl"),
                                              history=history, on_event=event, approve=approve,
-                                             resource_path=run.get("resource_path", ""))
+                                             resource_path=run.get("resource_path", ""), llm_config=selected)
             message = {"role": "assistant", "content": answer, "status": "done"}
         except asyncio.CancelledError:
             message = {"role": "assistant", "content": "Генерация остановлена.", "status": "cancelled"}
@@ -145,7 +148,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         finally:
             message = locals().get("message", {"role": "assistant", "content": "Запрос прерван.", "status": "error"})
             message.update({"steps": steps, "metrics": metrics, "verification": verification, "context":context,
-                            "seconds": round(time.monotonic() - started, 1), "model": model})
+                            "seconds": round(time.monotonic() - started, 1), "model": selected.model, "provider": selected.provider})
             chat["messages"].append(message)
             store.save(chat)
             run["done"] = True
@@ -166,23 +169,62 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         return JSONResponse({"stopping":True})
 
     async def status(request):
+        selected = get_config(default_model=model)
         online = False
         model_available = False
         try:
+            if selected.cloud:
+                raise ValueError("Cloud mode does not probe Ollama")
             async with httpx.AsyncClient(timeout=2) as http:
                 response = await http.get(ollama_url.rstrip("/") + "/api/tags")
                 response.raise_for_status()
                 names = [item["name"] for item in response.json().get("models", [])]
                 online = True
-                model_available = any(name == model or name.removesuffix(":latest") == model for name in names)
+                model_available = any(name == selected.model or name.removesuffix(":latest") == selected.model.removesuffix(":latest") for name in names)
         except (httpx.HTTPError, ValueError, KeyError):
             pass
+        if selected.cloud:
+            model_available = bool(selected.api_key)
         async with Client(mcp) as client:
             tools = (await client.list_tools()).tools
         window,input_budget,output_limit=context_settings()
-        return JSONResponse({"context_length":window,"context_budget":input_budget,"output_limit":output_limit,"csrf": csrf, "model": model, "online": online, "model_available": model_available,
+        return JSONResponse({"context_length":window,"context_budget":input_budget,"output_limit":output_limit,"csrf": csrf, "model": selected.model, "provider":selected.provider, "cloud":selected.cloud, "online": online, "model_available": model_available,
                              "backend": os.getenv("IACPAAS_BACKEND", "mock"), "tools": len(tools),
                              "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true"})
+
+    async def model_settings(request):
+        if request.method == "GET":
+            return JSONResponse(public_settings(model))
+        if lock.locked() or any(not run["done"] for run in runs.values()):
+            return JSONResponse({"error":"Дождитесь завершения запросов перед сменой модели"},status_code=409)
+        try:
+            previous = get_config(default_model=model)
+            save_settings(await request.json())
+            current = get_config(default_model=model)
+            if shutdown_callback is not None and not previous.cloud and (current.cloud or previous.model != current.model):
+                await unload_model(previous.model,ollama_url)
+            return JSONResponse(public_settings(model))
+        except (ValueError, TypeError, OSError):
+            return JSONResponse({"error":"Не удалось сохранить настройки. Проверьте провайдера, API ID и ключ; требуется Windows DPAPI."},status_code=400)
+
+    async def check_model(request):
+        selected = get_config(default_model=model)
+        if not selected.cloud:
+            return JSONResponse({"error":"Для локальной Qwen проверьте индикатор доступности Ollama"},status_code=400)
+        if lock.locked():
+            return JSONResponse({"error":"Дождитесь завершения текущего запроса"},status_code=409)
+        # Explicit user action: a tiny billable API call, without history or DB.
+        from .knowledge import KnowledgePlan
+        try:
+            async with lock:
+                reply = await complete(selected,[{"role":"user","content":"Return JSON with operation resources. Use defaults for other fields: empty strings, empty elements, all, le, null threshold, upper, false bound_inferred, desc, entity, limit 10."}],KnowledgePlan.model_json_schema(),2048)
+            plan = KnowledgePlan.model_validate_json(reply["message"]["content"])
+            if plan.operation != "resources": raise ValueError("Модель не выполнила тестовую инструкцию")
+            return JSONResponse({"ok":True,"provider":selected.provider,"model":selected.model,"tokens_in":reply["prompt_eval_count"],"tokens_out":reply["eval_count"]})
+        except ValueError as exc:
+            # Pydantic errors can echo model output; expose only our safe API errors.
+            text = str(exc) if not isinstance(exc, ValidationError) else "Модель не вернула корректный план"
+            return JSONResponse({"error":text},status_code=400)
 
     async def chats(request):
         if request.method == "GET":
@@ -226,6 +268,9 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             return JSONResponse({"error": "В этом диалоге уже выполняется запрос"}, status_code=409)
         if sum(not run["done"] for run in runs.values()) >= 4:
             return JSONResponse({"error": "Очередь заполнена. Дождитесь завершения запросов"}, status_code=429)
+        selected = get_config(default_model=model)
+        if selected.cloud and not selected.api_key:
+            return JSONResponse({"error":"Сначала сохраните API-ключ в настройках моделей"},status_code=400)
         # Bound transient event memory while preserving durable conversations.
         for old_id in list(runs):
             if runs[old_id]["done"] and len(runs) >= 30:
@@ -236,7 +281,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         store.save(chat)
         run_id = uuid.uuid4().hex
         run = {"id": run_id, "chat_id": chat["id"], "events": [], "changed": asyncio.Event(), "done": False,
-               "approval_id": None, "resource_path":data.get("resource_path", "")}
+               "approval_id": None, "resource_path":data.get("resource_path", ""), "llm_config":selected}
         runs[run_id] = run
         run["task"] = asyncio.create_task(execute(run))
         return JSONResponse({"run_id": run_id}, status_code=202)
@@ -371,7 +416,8 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         if shutdown_callback is not None:
-            await unload_model(model,ollama_url)
+            selected = get_config(default_model=model)
+            await unload_model(model if selected.cloud else selected.model,ollama_url)
 
     app = Starlette(lifespan=lifespan, routes=[Route("/", index), Route("/api/health",health),Route("/api/app/stop",stop_application,methods=["POST"]),Route("/api/status", status),
         Route("/api/chats", chats, methods=["GET", "POST"]), Route("/api/chats/{chat_id}", chat_item, methods=["GET", "DELETE"]),
@@ -379,6 +425,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         Route("/api/chat", send, methods=["POST"]), Route("/api/resources", resources), Route("/api/resource", resource_detail),
         Route("/api/exports/{checksum}", export_snapshot),
         Route("/api/account", account_settings, methods=["GET","POST"]),
+        Route("/api/llm", model_settings, methods=["GET","POST"]),Route("/api/llm/check",check_model,methods=["POST"]),
         Route("/api/runs/{run_id}", run_status), Route("/api/runs/{run_id}/events", events), Route("/api/runs/{run_id}/{action}", control, methods=["POST"]),
         Mount("/static", StaticFiles(directory=STATIC), name="static")])
 

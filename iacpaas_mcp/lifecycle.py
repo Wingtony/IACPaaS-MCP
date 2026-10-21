@@ -14,6 +14,7 @@ import httpx
 from dotenv import load_dotenv
 
 from .context import context_settings
+from .llm import get_config
 
 ROOT=Path(__file__).resolve().parents[1]
 STATE=ROOT/".local/runtime.json"
@@ -44,12 +45,14 @@ def owned_process(record):
 
 def start_app(open_browser=True, progress=lambda message:None):
     load_dotenv(ROOT/".env",override=True)
+    cloud = get_config().cloud
     (ROOT/"logs").mkdir(exist_ok=True)
     if not healthy():
-        progress("Запускаю службу Ollama…")
-        startup=subprocess.run(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(ROOT/"Start-Ollama.ps1")],capture_output=True,timeout=90,creationflags=HIDDEN)
-        if startup.returncode:
-            raise RuntimeError("Ollama не запустилась. Проверьте logs/ollama.stderr.log.")
+        if not cloud:
+            progress("Запускаю службу Ollama…")
+            startup=subprocess.run(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(ROOT/"Start-Ollama.ps1")],capture_output=True,timeout=90,creationflags=HIDDEN)
+            if startup.returncode:
+                raise RuntimeError("Ollama не запустилась. Проверьте logs/ollama.stderr.log.")
         progress("Запускаю веб-интерфейс…")
         instance=uuid.uuid4().hex
         with (ROOT/"logs/web.stdout.log").open("ab") as stdout,(ROOT/"logs/web.stderr.log").open("ab") as stderr:
@@ -67,6 +70,8 @@ def start_app(open_browser=True, progress=lambda message:None):
         if serving.get("instance_id")==instance:
             STATE.write_text(json.dumps({"pid":serving["pid"],"instance_id":instance}),encoding="utf-8")
     if open_browser:webbrowser.open(WEB)
+    if cloud:
+        return "Web запущен. Выбрана облачная модель; Ollama не загружается."
     progress("Сайт работает. Загружаю Qwen в память…")
     context,_,output=context_settings()
     options={"num_ctx":context,"num_predict":output}

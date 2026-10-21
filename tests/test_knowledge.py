@@ -308,3 +308,34 @@ def test_presence_any_mode_uses_union_not_intersection():
     data[MATERIALS]["successors"][0]["successors"].append(extra)
     result=query_graphs({"operation":"materials","elements":["Cr","Ni"],"element_mode":"any"},data,list(data))
     assert result["total"]==4
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "gemini", "deepseek", "openrouter"])
+def test_cloud_planner_uses_same_mcp_and_verified_calculations(provider,backend,tmp_path,monkeypatch):
+    from iacpaas_mcp.llm import ModelConfig
+    from iacpaas_mcp.knowledge import KnowledgePlan
+    from iacpaas_mcp.agent import run_agent
+    plan=json.dumps(KnowledgePlan(operation="composition",subject="B").model_dump())
+    seen=[]
+    def reply(request):
+        seen.append(request)
+        if provider=="openai":
+            data={"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":plan}]}]}
+        elif provider=="anthropic":
+            data={"stop_reason":"end_turn","content":[{"type":"text","text":plan}]}
+        else:
+            data={"choices":[{"finish_reason":"stop","message":{"content":plan}}]}
+        return httpx.Response(200,json=data)
+    real_http=httpx.AsyncClient
+    monkeypatch.setattr("iacpaas_mcp.llm.httpx.AsyncClient",lambda **kw:real_http(transport=httpx.MockTransport(reply),**kw))
+    monkeypatch.setenv("AGENT_UNLOAD_AFTER_REQUEST","true")
+    async def forbidden(*args,**kwargs):raise AssertionError("Cloud must never unload or generate with Ollama")
+    monkeypatch.setattr("iacpaas_mcp.agent.unload_model",forbidden)
+    events=[]
+    async def run():
+        async with Client(build_server(backend=backend,allow_write=False)) as client:
+            return await run_agent(client,"Покажи состав B","unused-local","http://unused.local",tmp_path/"cloud.jsonl",on_event=events.append,llm_config=ModelConfig(provider,"test-model","private-test-key"))
+    answer=asyncio.run(run())
+    assert "5 — 8" in answer and len(seen)==1
+    assert next(e for e in events if e["event"]=="verification")["status"]=="verified_result"
+    assert "private-test-key" not in (tmp_path/"cloud.jsonl").read_text(encoding="utf-8")

@@ -100,7 +100,8 @@ def dialogue_context(history, budget):
 
 
 
-async def run_planned_agent(client, question, model, ollama_url, trace_file, history=None, on_event=None, resource_path=""):
+async def run_planned_agent(client, question, model, ollama_url, trace_file, history=None, on_event=None, resource_path="", llm_config=None):
+    from .llm import complete
     async def emit(event):
         if on_event:
             value=on_event(event)
@@ -110,6 +111,7 @@ async def run_planned_agent(client, question, model, ollama_url, trace_file, his
     def trace(event):
         with trace_file.open("a",encoding="utf-8") as handle:
             handle.write(json.dumps({"time":time.time(),**event},ensure_ascii=False)+"\n")
+    trace({"event":"model_config","provider":llm_config.provider if llm_config else "ollama","model":llm_config.model if llm_config else model})
     context,budget,output=context_settings()
     definitions=(await client.list_tools()).tools
     tool=next(t for t in definitions if t.name=="query_knowledge")
@@ -137,19 +139,22 @@ async def run_planned_agent(client, question, model, ollama_url, trace_file, his
     async with httpx.AsyncClient(timeout=600) as http:
         for attempt in range(3):
             await emit({"event":"thinking","step":attempt})
-            for recovery in range(2):
-                response=await http.post(ollama_url.rstrip("/")+"/api/chat",json={"model":model,"messages":messages,"format":schema,
-                    "stream":False,"think":False,"keep_alive":keep_alive,"options":{"num_ctx":context,"num_predict":output,"temperature":0,**({"num_gpu":int(os.environ['AGENT_GPU_LAYERS'])} if os.getenv('AGENT_GPU_LAYERS') else {})}})
-                if response.status_code==500 and recovery==0:
-                    trace({"event":"model_retry","status":500,"notice":"One runner recovery; context and question unchanged"})
-                    await emit({"event":"model_retry","status":500})
-                    from .agent import unload_model
-                    await unload_model(model,ollama_url)
-                    await asyncio.sleep(1)
-                    continue
-                break
-            response.raise_for_status()
-            payload=response.json()
+            if llm_config is not None and llm_config.cloud:
+                payload=await complete(llm_config,messages,schema,output)
+            else:
+                for recovery in range(2):
+                    response=await http.post(ollama_url.rstrip("/")+"/api/chat",json={"model":model,"messages":messages,"format":schema,
+                        "stream":False,"think":False,"keep_alive":keep_alive,"options":{"num_ctx":context,"num_predict":output,"temperature":0,**({"num_gpu":int(os.environ['AGENT_GPU_LAYERS'])} if os.getenv('AGENT_GPU_LAYERS') else {})}})
+                    if response.status_code==500 and recovery==0:
+                        trace({"event":"model_retry","status":500,"notice":"One runner recovery; context and question unchanged"})
+                        await emit({"event":"model_retry","status":500})
+                        from .agent import unload_model
+                        await unload_model(model,ollama_url)
+                        await asyncio.sleep(1)
+                        continue
+                    break
+                response.raise_for_status()
+                payload=response.json()
             tokens_in+=payload.get("prompt_eval_count",0)
             tokens_out+=payload.get("eval_count",0)
             message=payload.get("message",{})
@@ -166,13 +171,15 @@ async def run_planned_agent(client, question, model, ollama_url, trace_file, his
                     if raw.startswith("```"):
                         raw="\n".join(raw.splitlines()[1:-1])
                     document=json.loads(raw)
+                    if not isinstance(document,dict):
+                        raise ValueError("План должен быть JSON-объектом")
                     plan=KnowledgePlan.model_validate(document.get("plan",document))
                 plan=guard_plan(plan,question,history)
                 break
             except (ValueError,KeyError,TypeError) as exc:
                 trace({"event":"plan_rejected","attempt":attempt,"content":message.get("content",""),"tool_calls":message.get("tool_calls",[]),"reason":str(exc)[:300]})
                 if attempt==2:
-                    raise RuntimeError("Qwen не смогла разобрать запрос. Укажите конкретную марку или условие поиска.") from None
+                    raise RuntimeError("Модель не смогла разобрать запрос. Укажите конкретную марку или условие поиска.") from None
                 messages.append({"role":"system","content":"Неверный формат. Верни JSON самого KnowledgePlan, без обёрток. operation выбери из enum; subject — строка, threshold — число или null."})
     paths_result=await client.call_tool("list_inforesources",{"limit":100})
     paths=paths_result.structured_content.get("paths",[])
