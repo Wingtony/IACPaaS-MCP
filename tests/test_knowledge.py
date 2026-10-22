@@ -334,7 +334,7 @@ def test_cloud_planner_uses_same_mcp_and_verified_calculations(provider,backend,
     events=[]
     async def run():
         async with Client(build_server(backend=backend,allow_write=False)) as client:
-            return await run_agent(client,"Покажи состав B","unused-local","http://unused.local",tmp_path/"cloud.jsonl",on_event=events.append,llm_config=ModelConfig(provider,"test-model","private-test-key"))
+            return await run_agent(client,"Покажи состав B","unused-local","http://unused.local",tmp_path/"cloud.jsonl",on_event=events.append,llm_config=ModelConfig(provider,"test-model","private-test-key"),mode="knowledge")
     answer=asyncio.run(run())
     assert "5 — 8" in answer and len(seen)==1
     assert next(e for e in events if e["event"]=="verification")["status"]=="verified_result"

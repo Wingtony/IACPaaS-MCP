@@ -7,7 +7,7 @@ from .provenance import verify_snapshot
 from . import provenance
 from .graph import counts, select, clip, walk
 
-READ_TOOLS = {"list_inforesources", "get_inforesource", "get_subgraph", "count_graph", "query_graph", "search_resources"}
+READ_TOOLS = {"list_inforesources", "get_inforesource", "get_subgraph", "count_graph", "query_graph", "search_resources", "validate_resource"}
 LABELS = {"nodes":"Вершины", "edges":"Дуги", "links":"Ссылки", "total":"Всего совпадений", "path":"Путь",
           "name":"Имя", "value":"Значение", "meta":"Метапонятие", "type":"Тип", "title":"Название",
           "paths":"Доступные ресурсы", "truncated":"Список сокращён", "depth":"Глубина", "resource":"База",
@@ -51,6 +51,9 @@ def fields(data, prefix=""):
 def verify_derivation(record):
     """Recompute graph counts / re-read returned vertices from the archived export."""
     data, args = record["data"], record["arguments"]
+    if record['tool']=='validate_resource':
+        from .graph import validate
+        return data.get('valid') is True and counts(validate(args['ir_json']))=={key:data.get(key) for key in ('nodes','edges','links')}
     if record["tool"] == "search_resources":
         from .search import located_nodes, normalize
         sources=data.get("_sources",[])

@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [main, feature/cloud-model-providers]
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
 

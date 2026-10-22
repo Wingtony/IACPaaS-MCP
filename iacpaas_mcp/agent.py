@@ -59,13 +59,19 @@ async def unload_model(model, ollama_url):
 
 
 async def run_agent(client, question, model, ollama_url, trace_file, max_steps=12, approve=None,
-                    history=None, on_event=None, resource_path="", mode="knowledge", llm_config=None):
+                    history=None, on_event=None, resource_path="", mode="adaptive", llm_config=None):
     from .llm import get_config
     llm_config = llm_config or get_config(default_model=model)
     model = llm_config.model
-    if llm_config.cloud and mode != "knowledge":
-        raise ValueError("Облачные модели поддерживаются в режиме предметного планировщика")
+    if mode not in {'adaptive','knowledge','raw'}:
+        raise ValueError('Неизвестный режим агента')
+    if llm_config.cloud and mode == "raw":
+        raise ValueError("Для облачной модели выберите adaptive или knowledge")
     try:
+        if mode == 'adaptive':
+            from .adaptive_agent import run_adaptive_agent
+            return await run_adaptive_agent(client, question, model, ollama_url, trace_file, max_steps, approve,
+                                            history, on_event, resource_path, llm_config)
         if mode == "knowledge":
             from .planner_agent import run_planned_agent
             return await run_planned_agent(client, question, model, ollama_url, trace_file, history, on_event, resource_path, llm_config=llm_config)
@@ -247,12 +253,12 @@ async def main_async(args):
             raise ValueError("Для HTTP задайте MCP_BEARER_TOKEN")
         async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + token}) as http:
             async with Client(streamable_http_client(args.mcp_url, http_client=http)) as client:
-                answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected)
+                answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected, mode=args.mode, max_steps=args.max_steps)
     else:
         params = StdioServerParameters(command=sys.executable, args=["-m", "iacpaas_mcp.server"],
                                        cwd=str(PROJECT), env=dict(os.environ))
         async with Client(params) as client:
-            answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected)
+            answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected, mode=args.mode, max_steps=args.max_steps)
     print(answer)
     print(f"\nТрасса: {trace}", file=sys.stderr)
 
@@ -267,6 +273,8 @@ def main():
     parser.add_argument("--model", default=None)
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--mcp-url", default="")
+    parser.add_argument('--mode', choices=['adaptive','knowledge','raw'], default='adaptive')
+    parser.add_argument('--max-steps', type=int, choices=range(3,21), default=12)
     args = parser.parse_args()
     try:
         asyncio.run(main_async(args))

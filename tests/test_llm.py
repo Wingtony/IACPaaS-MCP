@@ -140,13 +140,14 @@ def test_cloud_start_never_starts_or_prewarms_ollama(monkeypatch):
 
 
 def test_web_cloud_answer_records_actual_model_without_exposing_key(tmp_path,saved,monkeypatch):
-    plan=json.dumps(KnowledgePlan(operation="resources").model_dump())
     seen=[]
     def reply(request):
         if request.url.path == '/api/tags':
             return httpx.Response(200,json={"models":[]})
         seen.append(request)
         assert request.url.host == 'api.openai.com'
+        decision={'action':'call','call':{'tool':'query_knowledge','arguments':{'plan':{'operation':'resources'}}},'evidence_ids':[],'question':'','sufficient':False,'assessment':'Нужен список баз'} if len(seen)==1 else {'action':'finish','call':None,'evidence_ids':['S1'],'question':'','sufficient':True,'assessment':'Получен список баз'}
+        plan=json.dumps(decision)
         return httpx.Response(200,json={"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":plan}]}]})
     original=httpx.AsyncClient
     monkeypatch.setattr(llm.httpx,"AsyncClient",lambda **kw:original(transport=httpx.MockTransport(reply),**kw))
@@ -163,6 +164,6 @@ def test_web_cloud_answer_records_actual_model_without_exposing_key(tmp_path,sav
         result=client.get('/api/chats/'+chat['id'])
         answer=result.json()['messages'][-1]
         assert answer['status']=='done' and answer['provider']=='openai' and answer['model']=='gpt-4.1-mini'
-        assert len(seen)==1 and answer['steps'][0]['name']=='query_knowledge'
+        assert len(seen)==2 and answer['steps'][0]['name']=='query_knowledge'
         assert KEY not in result.text
         assert KEY not in ''.join(p.read_text(encoding='utf-8') for p in (tmp_path/'logs').rglob('*.jsonl'))
