@@ -86,7 +86,7 @@ async function selectChat(id) {
 function stepsHTML(steps, busy = false) {
   if (!steps.length) return '';
   return `<details class="steps" ${busy ? 'open' : ''}><summary>${icon('check')}<span>${busy ? 'Агент работает с базой' : 'Шаги работы с базой'}</span><span class="steps-count">${steps.length} MCP</span></summary>${steps.map(step => {
-    const result = step.result; const error = result?.is_error;
+    const result = step.result; const error = step.is_error || result?.is_error || !!result?.error;
     return `<details class="tool-step"><summary><span class="tool-name">${escapeHTML(step.name)}</span><span class="tool-time">${result ? `${step.seconds ?? 0} с` : 'выполняется'}</span><span class="tool-badge ${error ? 'error' : ''}">${error ? 'ошибка' : result ? 'MCP' : '…'}</span></summary><pre>${escapeHTML(JSON.stringify({arguments:step.arguments, ...(result ? {result} : {})},null,2))}</pre></details>`;
   }).join('')}</details>`;
 }
@@ -96,11 +96,11 @@ function verificationHTML(report) {
   if(report?.status==='verified_result' && report.rows===0) report={...report,status:'empty_result'};
   if (!report?.status) report={status:'not_verified',scope:'',notice:'Для этого исторического ответа проверка не выполнялась. Повторите вопрос, чтобы получить ссылки на снимок базы.'};
   const checked = ['verified_fields','verified_result'].includes(report.status);
-  const statusLabel={blocked:'Ответ не прошёл проверку',needs_clarification:'Запрос требует уточнения',empty_result:'Совпадений нет — проверьте условия',incomplete_result:'Результат неполный: часть баз недоступна'}[report.status] || 'Нет проверенных фактов базы';
+  const statusLabel={blocked:'Ответ не прошёл проверку',needs_clarification:'Запрос требует уточнения',empty_result:'Совпадений нет — проверьте условия',incomplete_result:'Результат неполный: часть баз недоступна',incomplete:'Полнота ответа не подтверждена'}[report.status] || 'Нет проверенных фактов базы';
   const sources = report.sources || [];
   const snapshots = sources.flatMap(source=>source.exports||[]);
   const extraProof = snapshots.length ? `<div class="search-coverage"><strong>Экспорты проверенных баз</strong>${snapshots.map(source=>/^[a-f0-9]{64}$/.test(source.export_sha256||'') ? `<a href="/api/exports/${source.export_sha256}" download>${escapeHTML(source.path)} · ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}</a>`:'').join('')}</div>` : '';
-  return `<details class="verification ${checked ? 'checked' : 'unverified'}"><summary>${icon(checked ? 'check' : 'info')}<span>${checked ? (report.status === 'verified_result' ? 'Запрос, расчёты и ответ сверены' : 'Поля сверены со снимком') : statusLabel}</span><span>${checked ? (report.status === 'verified_result' ? 'Строк: '+report.rows : 'Поля: '+report.claims.length) : ''}</span></summary><div class="verification-body">${report.query_plan ? `<div class="query-plan"><strong>Как понят вопрос</strong><pre>${escapeHTML(JSON.stringify(report.query_plan,null,2))}</pre><small>Если выбран неверный объект или условие, отредактируйте вопрос.</small></div>` : ''}<p><strong>Область запроса:</strong> ${escapeHTML(report.scope || 'Все подключённые базы')}</p><p>${escapeHTML(report.notice || '')}</p>${sources.map(source => `<div class="source-proof"><strong>${escapeHTML(source.id)} · ${escapeHTML(source.tool)}</strong><pre>${escapeHTML(JSON.stringify(source.arguments,null,2))}</pre><small>Получено: ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}<br>SHA-256 результата: ${escapeHTML(source.sha256)}</small>${source.export?.export_sha256 && /^[a-f0-9]{64}$/.test(source.export.export_sha256) ? `<a href="/api/exports/${source.export.export_sha256}" download>Скачать исходный снимок экспорта</a>` : ''}</div>`).join('')}${extraProof}</div></details>`;
+  return `<details class="verification ${checked ? 'checked' : 'unverified'}"><summary>${icon(checked ? 'check' : 'info')}<span>${checked ? (report.status === 'verified_result' ? 'Данные и расчёты сверены со снимками' : 'Поля сверены со снимком') : statusLabel}</span><span>${checked ? (report.status === 'verified_result' ? (Number.isInteger(report.rows)?'Строк: '+report.rows:'Источников: '+sources.length) : 'Поля: '+report.claims.length) : ''}</span></summary><div class="verification-body">${report.query_plan ? `<div class="query-plan"><strong>Как понят вопрос</strong><pre>${escapeHTML(JSON.stringify(report.query_plan,null,2))}</pre><small>Если выбран неверный объект или условие, отредактируйте вопрос.</small></div>` : ''}<p><strong>Область запроса:</strong> ${escapeHTML(report.scope || 'Все подключённые базы')}</p><p>${escapeHTML(report.notice || '')}</p>${report.assessment ? `<p><strong>Оценка достаточности агентом:</strong> ${escapeHTML(report.assessment)}</p>` : ''}${sources.map(source => `<div class="source-proof"><strong>${escapeHTML(source.id)} · ${escapeHTML(source.tool)}</strong><pre>${escapeHTML(JSON.stringify(source.arguments,null,2))}</pre><small>Получено: ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}<br>SHA-256 результата: ${escapeHTML(source.sha256)}</small>${source.export?.export_sha256 && /^[a-f0-9]{64}$/.test(source.export.export_sha256) ? `<a href="/api/exports/${source.export.export_sha256}" download>Скачать исходный снимок экспорта</a>` : ''}</div>`).join('')}${extraProof}</div></details>`;
 }
 function renderMessages() {
   $('welcome').hidden = !!current?.messages.length; $('messages').replaceChildren();
@@ -132,14 +132,15 @@ function connectRun(id) {
   stream.onmessage = async ({data}) => {
     if (runId !== id || !pending) return;
     const event = JSON.parse(data);
-    if (event.event === 'queued') { renderPending('Запрос в очереди к локальной модели'); setState('Ожидание модели',true); }
-    if (event.event === 'started' || event.event === 'thinking') { renderPending('Qwen изучает вопрос'); setState('Агент работает',true); }
+    if (event.event === 'queued') { renderPending('Запрос в очереди к модели'); setState('Ожидание модели',true); }
+    if (event.event === 'started' || event.event === 'thinking') { renderPending('Агент выбирает следующий шаг'); setState('Агент работает',true); }
     if (event.event === 'tool_start') { pending.steps.push(event); renderPending(toolNames[event.name] || 'Вызов инструмента'); }
     if (event.event === 'tool') {
       const index = pending.steps.findLastIndex(step => step.name === event.name && !step.result);
       if (index >= 0) pending.steps[index] = event; else pending.steps.push(event);
       renderPending('Модель готовит ответ по данным базы');
     }
+    if (event.event === 'replanning') renderPending('Агент корректирует план: '+event.message);
     if (event.event === 'approval') showApproval(event);
     if (event.event === 'context') { $('context-indicator').textContent=event.compressed ? `Сжато: ≈${event.before_estimate} → ≈${event.after_estimate}` : `Контекст: ≈${event.after_estimate} / ${event.budget}${event.context_length ? ' · окно '+Math.round(event.context_length/1024)+'K' : ''}`; }
     if (event.event === 'verification') { pending.verification=event; }

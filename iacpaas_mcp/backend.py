@@ -1,6 +1,9 @@
 import copy
+import asyncio
+import base64
 import json
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -10,6 +13,22 @@ from .provenance import capture
 from .credentials import load_account
 
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "observations.json"
+
+
+class PlatformError(ValueError):
+    def __init__(self,message,code='platform_error',retryable=True,suggestion='Проверьте параметры запроса'):
+        super().__init__(message)
+        self.code,self.retryable,self.suggestion=code,retryable,suggestion
+
+
+def token_expired(token):
+    # This is only a refresh hint, never authentication or signature validation.
+    try:
+        raw=token.split('.')[1];payload=json.loads(base64.urlsafe_b64decode(raw+'='*(-len(raw)%4)))
+        exp=payload.get('exp')
+        return isinstance(exp,(float,int)) and exp<time.time()+30
+    except (ValueError,IndexError,TypeError):
+        return False
 
 
 class MockBackend:
@@ -45,22 +64,64 @@ class HttpBackend:
     def __init__(self, transport=None):
         self.base = os.getenv("IACPAAS_BASE_URL", "https://iacpaas.dvo.ru").rstrip("/")
         self.headers = {}
+        self.saved_login=False
+        self.saved_identity=None
+        self.refresh_lock=asyncio.Lock()
         if key := os.getenv("IACPAAS_API_KEY"):
             self.headers["X-API-KEY"] = key
         elif jwt := os.getenv("IACPAAS_JWT"):
             self.headers["Authorization"] = "Bearer " + jwt
         elif saved_token := load_account().get("token"):
+            if self.base!='https://iacpaas.dvo.ru':
+                raise ValueError('Сохранённый аккаунт можно использовать только с официальным HTTPS API IACPaaS')
             self.headers["Authorization"] = "Bearer " + saved_token
+            self.saved_login=True
+            self.saved_identity=load_account().get('username')
         else:
             raise ValueError("Для HTTP backend задайте IACPAAS_API_KEY или IACPAAS_JWT в .env")
         self.transport = transport
 
     async def request(self, method, endpoint, max_bytes=8_000_000, **kwargs):
+        used=self.headers.get('Authorization','')
+        if token_expired(used.removeprefix('Bearer ')):
+            if self.saved_login:
+                await self.refresh_saved(used)
+            else:
+                raise PlatformError('JWT IACPaaS истёк','authentication_required',False,'Переподключите IACPaaS или обновите IACPAAS_JWT')
+        used=self.headers.get('Authorization','')
+        try:
+            return await self._request_once(method,endpoint,max_bytes,**kwargs)
+        except PlatformError as exc:
+            # Never automatically replay a mutation: its outcome may be unknown.
+            if method=='GET' and self.saved_login and exc.code=='authentication_required':
+                await self.refresh_saved(used)
+                return await self._request_once(method,endpoint,max_bytes,**kwargs)
+            raise
+
+    async def refresh_saved(self, previous):
+        async with self.refresh_lock:
+            if self.headers.get('Authorization')!=previous:return
+            from .auth import signin
+            from .credentials import save_account
+            saved=load_account()
+            try:
+                if not saved.get('username') or not saved.get('password') or saved.get('username')!=self.saved_identity:raise ValueError()
+                token=await asyncio.to_thread(signin,saved['username'],saved['password'])
+                await asyncio.to_thread(save_account,saved['username'],saved['password'],token)
+            except (ValueError,OSError,httpx.HTTPError):
+                raise PlatformError('Не удалось обновить вход IACPaaS','authentication_required',False,'Переподключите аккаунт в настройках IACPaaS') from None
+            self.headers['Authorization']='Bearer '+token
+
+    async def _request_once(self, method, endpoint, max_bytes=8_000_000, **kwargs):
         try:
             async with httpx.AsyncClient(base_url=self.base, headers=self.headers, timeout=60,
                                          transport=self.transport, follow_redirects=False) as client:
                 async with client.stream(method, endpoint, **kwargs) as response:
                     if response.status_code >= 400:
+                        if response.status_code in (401,403):
+                            auth=response.status_code==401
+                            raise PlatformError(f'IACPaaS: HTTP {response.status_code}; требуется вход или доступ',
+                                'authentication_required' if auth else 'permission_denied',False,'Переподключите IACPaaS' if auth else 'Проверьте права аккаунта на ресурс')
                         raise ValueError(f"IACPaaS: HTTP {response.status_code}; проверьте доступ и параметры")
                     data = bytearray()
                     async for chunk in response.aiter_bytes():
@@ -71,6 +132,10 @@ class HttpBackend:
         except httpx.HTTPError:
             raise ValueError("IACPaaS недоступна или истёк таймаут 60 с") from None
         if isinstance(result, dict) and (result.get("success") is False or result.get("platformUnavailable") or result.get("error")):
+            import re
+            details=' '.join(str(result.get(key,'')) for key in ('error','explanation','message'))
+            if re.search(r'jwt|token|expired|авториз|аутенти|ист[её]к',details,re.I):
+                raise PlatformError('IACPaaS отклонила авторизацию','authentication_required',False,'Переподключите аккаунт IACPaaS')
             raise ValueError("IACPaaS отклонила запрос; проверьте путь, права и состояние платформы")
         return result
 

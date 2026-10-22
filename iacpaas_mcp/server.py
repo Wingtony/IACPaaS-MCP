@@ -11,15 +11,15 @@ from typing import Annotated, Any
 
 from dotenv import load_dotenv
 from mcp.server import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
-from pydantic import Field
+from mcp.types import ToolAnnotations, CallToolResult, TextContent
+from pydantic import Field, TypeAdapter, ValidationError
 
 from .backend import HttpBackend, MockBackend
 from .graph import clip, counts, select, validate, walk
 from .policy import WritePolicy
 from .search import ResourceSearch
 from .knowledge import KnowledgePlan, execute_plan
+from .results import ResourceList, Graph, Subgraph, Counts, QueryResult, SearchResult, KnowledgeResult, ValidationResult, WriteResult, ErrorResult
 
 PROJECT = Path(__file__).resolve().parent.parent
 PathArg = Annotated[str, Field(min_length=1, max_length=500, description="Путь внутри Мой Фонд, например Учебные/База наблюдений")]
@@ -31,16 +31,25 @@ log = logging.getLogger("iacpaas")
 
 
 def checked(fn):
+    def failure(code,message,retryable,suggestion):
+        data={'error':{'code':code,'message':message,'retryable':retryable,'tool':fn.__name__,'suggestion':suggestion}}
+        TypeAdapter(ErrorResult).validate_python(data)
+        return CallToolResult(is_error=True,structured_content=data,content=[TextContent(type='text',text=json.dumps(data,ensure_ascii=False))])
     @functools.wraps(fn)
     async def call(*args, **kwargs):
         start = time.monotonic()
         try:
             result = await fn(*args, **kwargs)
+            try:
+                TypeAdapter(fn.__annotations__["return"]).validate_python(result,strict=True)
+            except ValidationError:
+                return failure('invalid_result','Результат инструмента не соответствует выходной схеме',False,'Проверьте адаптер платформы')
             if len(json.dumps(result, ensure_ascii=False)) > (64000 if fn.__name__ == "query_knowledge" else 12000):
                 raise ValueError("Результат слишком велик для локальной модели; уменьшите depth или limit")
             return result
         except (ValueError, KeyError, TypeError, RecursionError) as exc:
-            raise ToolError(str(exc) if isinstance(exc, ValueError) else "Некорректная структура графа") from None
+            message = str(exc) if isinstance(exc, ValueError) else "Некорректная структура графа"
+            return failure(getattr(exc,'code','invalid_request'),message,getattr(exc,'retryable',True),getattr(exc,'suggestion','Исправьте путь/аргументы или уменьшите depth/limit; используйте list_inforesources/query_graph для точных путей'))
         finally:
             log.info(json.dumps({"event": "tool", "tool": fn.__name__, "seconds": round(time.monotonic() - start, 3)}))
     return call
@@ -62,7 +71,7 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def list_inforesources(filter: str = "", limit: Limit = 20) -> dict[str, Any]:
+    async def list_inforesources(filter: str = "", limit: Limit = 20) -> ResourceList:
         """Список известных ИР из конфигурации; это не поиск по всему фонду платформы."""
         paths = list(backend.resources) if isinstance(backend, MockBackend) else known
         matches = [path for path in paths if filter.casefold() in path.casefold()]
@@ -70,13 +79,13 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def get_inforesource(path: PathArg) -> dict[str, Any]:
+    async def get_inforesource(path: PathArg) -> Graph:
         """Метаданные ИР и корневая вершина без потомков."""
         return await backend.export(path, depth=0)
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def get_subgraph(path: PathArg, root: str = "", depth: Depth = 2) -> dict[str, Any]:
+    async def get_subgraph(path: PathArg, root: str = "", depth: Depth = 2) -> Subgraph:
         """Подграф: root — путь из query_graph; пусто означает корень. depth=0 — одна вершина."""
         graph = await backend.export(path,depth=depth) if not root else await search_index.full_export(path)
         result = clip(select(graph, root), depth)
@@ -86,14 +95,14 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def count_graph(path: PathArg, root: str = "") -> dict[str, Any]:
+    async def count_graph(path: PathArg, root: str = "") -> Counts:
         """Точно посчитать вершины, дуги и ссылки в полном графе или выбранной ветке. Ссылка не новая вершина."""
         graph = await search_index.full_export(path)
         return {**counts(select(graph, root)), "_source": graph.get("_source", {})}
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def query_graph(path: PathArg, text: str = "", meta: str = "", root: str = "", limit: Limit = 20) -> dict[str, Any]:
+    async def query_graph(path: PathArg, text: str = "", meta: str = "", root: str = "", limit: Limit = 20) -> QueryResult:
         """Найти вершины по части имени/значения и точной метке meta. Возвращает пути; ссылки исключены."""
         exported = await search_index.full_export(path)
         graph = select(exported, root)
@@ -114,7 +123,7 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
     @checked
     async def search_resources(text: Annotated[str,Field(max_length=150,description="Короткая марка, слово или символ, не весь вопрос")],
                                meta: str="", limit: Annotated[int,Field(ge=1,le=20)]=8,
-                               resource_path: str="", refresh: bool=False) -> dict[str,Any]:
+                               resource_path: str="", refresh: bool=False) -> SearchResult:
         """Ищет по ВСЕМ подключённым базам и онтологиям. Необязательный resource_path ограничивает одной базой.
         Первый поиск строит локальный индекс больших графов; в модель идут только совпадения.
         complete=false означает неполное покрытие: нельзя говорить «ничего нет во всех базах».
@@ -130,7 +139,7 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def query_knowledge(plan: KnowledgePlan, resource_path: str = "") -> dict[str, Any]:
+    async def query_knowledge(plan: KnowledgePlan, resource_path: str = "") -> KnowledgeResult:
         """Предметный запрос к материалам: состав, элемент, свойство, термины, марки, фильтры и рейтинг.
         Проценты, интервалы, полные подсчёты и сортировка вычисляются кодом по всему ресурсу.
         Ответ answer уже сформирован из исходных данных: его нельзя пересчитывать или менять числа.
@@ -144,7 +153,7 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked
-    async def validate_resource(ir_json: Annotated[str, Field(max_length=2000000)]) -> dict[str, Any]:
+    async def validate_resource(ir_json: Annotated[str, Field(max_length=2000000)]) -> ValidationResult:
         """Локальная базовая проверка универсального JSON. Не проверяет соответствие онтологии платформы."""
         return {"valid": True, **counts(validate(ir_json))}
 
@@ -165,7 +174,7 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
     @mcp.tool(annotations=WRITE, structured_output=True)
     @checked
     async def update_concept(path: PathArg, concept_path: str, metaconcept_path: str,
-                             mark: Annotated[str, Field(max_length=1000)], comment: str = "", confirm_token: str = "") -> dict[str, Any]:
+                             mark: Annotated[str, Field(max_length=1000)], comment: str = "", confirm_token: str = "") -> WriteResult:
         """Изменяет вершину. Без confirm_token выдаёт предпросмотр. Повторять с токеном только после согласия человека."""
         args = dict(path=path, concept_path=concept_path, metaconcept_path=metaconcept_path, mark=mark, comment=comment)
         return await write("update_concept", args, confirm_token, backend.update)
@@ -173,7 +182,7 @@ def build_server(backend=None, known_paths=None, allow_write=None, **kwargs):
     @mcp.tool(annotations=WRITE, structured_output=True)
     @checked
     async def import_inforesource(folder_path: str, ir_json: Annotated[str, Field(max_length=2000000)],
-                                  clear_if_exists: bool = False, confirm_token: str = "") -> dict[str, Any]:
+                                  clear_if_exists: bool = False, confirm_token: str = "") -> WriteResult:
         """Импортирует JSON в папку. clear_if_exists может очистить существующий ИР. Нужны предпросмотр и согласие человека."""
         validate(ir_json)
         args = dict(folder_path=folder_path, ir_json=ir_json, clear_if_exists=clear_if_exists)
