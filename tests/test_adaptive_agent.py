@@ -180,3 +180,41 @@ def test_invalid_platform_output_is_a_diagnostic_not_a_success():
             assert result.is_error
             assert result.structured_content['error']['code']=='invalid_result'
     asyncio.run(run())
+
+
+def test_subgraph_resource_vertex_confusion_gets_specific_repair_and_history(harness):
+    answer,events,requests,_=harness([call('query_graph',path=PATH,text='Основные жалобы'),
+        call('get_subgraph',path='Основные жалобы',depth=1),
+        call('get_subgraph',path=PATH,root='Основные жалобы',depth=1),finish('S2')])
+    followup=requests[2]['messages']
+    rejected=json.loads(next(m['content'] for m in followup if m['role']=='assistant' and 'get_subgraph' in m['content']))
+    assert rejected['call']['arguments']['path']=='Основные жалобы'
+    assert 'arguments.root' in followup[-1]['content'] and PATH in followup[-1]['content']
+    assert 'Непосредственные разделы: **2**' in answer and '```json' not in answer
+    assert [e['name'] for e in events if e['event']=='tool']==['query_graph','get_subgraph']
+    assert next(e for e in events if e['event']=='verification')['status']=='verified_result'
+
+
+def test_successful_tool_arguments_and_assistant_decision_are_preserved(harness):
+    _,_,requests,_=harness([call('query_graph',path=PATH,text='Основные жалобы',limit=3),
+                          call('get_subgraph',path=PATH,root='Основные жалобы',depth=1),finish('S2')])
+    messages=requests[1]['messages']
+    previous=json.loads(next(m['content'] for m in messages if m['role']=='assistant'))
+    assert previous['call']['arguments']['text']=='Основные жалобы'
+    assert '"arguments"' in messages[-1]['content'] and '"limit": 3' in messages[-1]['content']
+
+
+def test_model_schema_restricts_resources_and_requires_explicit_subgraph_root(harness):
+    _,_,requests,_=harness([call('count_graph',path=PATH),finish('S1')])
+    schema=requests[0]['format']
+    subgraph=next(c for c in schema['properties']['call']['anyOf'] if c.get('properties',{}).get('tool',{}).get('enum')==['get_subgraph'])
+    assert subgraph['properties']['arguments']['properties']['path']['enum']==[PATH]
+    assert 'root' in subgraph['properties']['arguments']['required']
+
+
+def test_missing_subgraph_root_is_repaired_instead_of_reading_the_wrong_root(harness):
+    answer,events,_,_=harness([call('get_subgraph',path=PATH,depth=0),
+                            call('get_subgraph',path=PATH,root='',depth=0),finish('S1')])
+    assert len([e for e in events if e['event']=='tool'])==1
+    assert any('arguments.root' in e.get('message','') for e in events if e['event']=='replanning')
+    assert '(корень ИР)' in answer
