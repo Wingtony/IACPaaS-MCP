@@ -83,3 +83,17 @@ def test_http_200_expired_token_error_retries_only_after_refresh(saved):
     b.headers['Authorization']='Bearer opaque-rejected-token'
     assert asyncio.run(b.request('GET','/test'))=={'ok':True}
     assert sent==['Bearer opaque-rejected-token','Bearer '+fresh] and len(calls)==1
+
+
+def test_platform_update_dispatch_error_is_diagnostic_and_never_retried(monkeypatch):
+    monkeypatch.setenv('IACPAAS_API_KEY','test-key')
+    sent=[]
+    def reply(request):
+        sent.append(request)
+        return httpx.Response(200,json={'success':False,'error':'Ошибка',
+            'explanation':'Неожиданное значение параметра action: updateVertice'})
+    b=backend.HttpBackend(transport=httpx.MockTransport(reply))
+    with pytest.raises(backend.PlatformError) as caught:
+        asyncio.run(b.request('PUT','/api/data/update',json={'path':'own-demo'}))
+    assert caught.value.code=='platform_operation_unavailable' and not caught.value.retryable
+    assert len(sent)==1 and 'другие пути' in caught.value.suggestion
