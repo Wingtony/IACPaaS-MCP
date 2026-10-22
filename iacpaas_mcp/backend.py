@@ -134,6 +134,10 @@ class HttpBackend:
         if isinstance(result, dict) and (result.get("success") is False or result.get("platformUnavailable") or result.get("error")):
             import re
             details=' '.join(str(result.get(key,'')) for key in ('error','explanation','message'))
+            if endpoint == '/api/data/update' and 'updateVertice' in details and 'action' in details:
+                raise PlatformError('IACPaaS отклонила внутреннюю операцию обновления вершины',
+                    'platform_operation_unavailable',False,
+                    'Не повторяйте изменение и не подбирайте другие пути: проверьте состояние через чтение и обратитесь к администратору платформы')
             if re.search(r'jwt|token|expired|авториз|аутенти|ист[её]к',details,re.I):
                 raise PlatformError('IACPaaS отклонила авторизацию','authentication_required',False,'Переподключите аккаунт IACPaaS')
             raise ValueError("IACPaaS отклонила запрос; проверьте путь, права и состояние платформы")
