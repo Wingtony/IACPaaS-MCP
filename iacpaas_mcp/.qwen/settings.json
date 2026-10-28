@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "my-local-mcp": {
-      "url": "http://localhost:8770" 
-    }
-  }
-}
