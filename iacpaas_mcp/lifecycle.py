@@ -47,12 +47,18 @@ def start_app(open_browser=True, progress=lambda message:None):
     load_dotenv(ROOT/".env",override=True)
     cloud = get_config().cloud
     (ROOT/"logs").mkdir(exist_ok=True)
+    #Выбор оси
+    
     if not healthy():
         if not cloud:
-            progress("Запускаю службу Ollama…")
-            startup=subprocess.run(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(ROOT/"Start-Ollama.ps1")],capture_output=True,timeout=90,creationflags=HIDDEN)
-            if startup.returncode:
-                raise RuntimeError("Ollama не запустилась. Проверьте logs/ollama.stderr.log.")
+                if os.name=="nt":
+                    progress("Запускаю службу Ollama…")
+                    startup=subprocess.run(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(ROOT/"Start-Ollama.ps1")],capture_output=True,timeout=90,creationflags=HIDDEN)
+                    if startup.returncode:
+                        raise RuntimeError("Ollama не запустилась. Проверьте logs/ollama.stderr.log.")
+                else:
+                    pass
+                    
         progress("Запускаю веб-интерфейс…")
         instance=uuid.uuid4().hex
         with (ROOT/"logs/web.stdout.log").open("ab") as stdout,(ROOT/"logs/web.stderr.log").open("ab") as stderr:
@@ -69,6 +75,7 @@ def start_app(open_browser=True, progress=lambda message:None):
         serving=httpx.get(WEB+"/api/health",timeout=3).json()
         if serving.get("instance_id")==instance:
             STATE.write_text(json.dumps({"pid":serving["pid"],"instance_id":instance}),encoding="utf-8")
+                
     if open_browser:webbrowser.open(WEB)
     if cloud:
         return "Web запущен. Выбрана облачная модель; Ollama не загружается."
@@ -76,7 +83,9 @@ def start_app(open_browser=True, progress=lambda message:None):
     context,_,output=context_settings()
     options={"num_ctx":context,"num_predict":output}
     if os.getenv("AGENT_GPU_LAYERS"):options["num_gpu"]=int(os.environ["AGENT_GPU_LAYERS"])
-    url=os.getenv("OLLAMA_URL","http://127.0.0.1:11435")
+    default_port = "11435" if os.name == "nt" else "11434"
+    url = os.getenv("OLLAMA_URL", f"http://127.0.0.1:{default_port}")
+
     response=httpx.post(url+"/api/generate",json={"model":os.getenv("OLLAMA_MODEL","qwen-agent"),"keep_alive":-1,"options":options},timeout=180)
     response.raise_for_status()
     return "Web и Qwen запущены. Модель остаётся в памяти до остановки."
@@ -100,7 +109,8 @@ def stop_app(progress=lambda message:None):
         if not healthy():break
         time.sleep(.3)
     progress("Освобождаю память Qwen…")
-    url=os.getenv("OLLAMA_URL","http://127.0.0.1:11435")
+    default_port = "11435" if os.name == "nt" else "11434"
+    url = os.getenv("OLLAMA_URL", f"http://127.0.0.1:{default_port}")
     model=os.getenv("OLLAMA_MODEL","qwen-agent")
     try:
         httpx.post(url+"/api/generate",json={"model":model,"keep_alive":0},timeout=30).raise_for_status()
