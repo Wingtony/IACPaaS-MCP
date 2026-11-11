@@ -208,7 +208,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         window,input_budget,output_limit=context_settings()
         return JSONResponse({"context_length":window,"context_budget":input_budget,"output_limit":output_limit,"csrf": csrf, "model": selected.model, "provider":selected.provider, "cloud":selected.cloud, "online": online, "model_available": model_available,
                              "backend": os.getenv("IACPAAS_BACKEND", "mock"), "tools": len(tools),
-                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true'})
+                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true', "review_version":2})
 
     async def model_settings(request):
         if request.method == "GET":
@@ -398,6 +398,13 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         return JSONResponse(result.structured_content)
 
     verification_lock = asyncio.Lock()
+    review_tasks = {}
+
+    async def cancel_review(request):
+        task=review_tasks.get(request.path_params['chat_id'])
+        if not task or task.done(): return JSONResponse({'error':'Активной проверки нет'},status_code=409)
+        task.cancel()
+        return JSONResponse({'cancelled':True})
 
     async def review_answer(request):
         chat=store.get(request.path_params["chat_id"])
@@ -414,13 +421,24 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             question=next((m["content"] for m in reversed(chat["messages"][:index]) if m["role"]=="user"),"")
             from .verifier import verify_answer
             async with verification_lock, lock:
-                report=await verify_answer(question,message["content"],message.get("steps",[]),get_config(default_model=model))
+                task=asyncio.create_task(verify_answer(question,message['content'],message.get('steps',[]),get_config(default_model=model)))
+                review_tasks[chat['id']]=task
+                try:
+                    report=await asyncio.wait_for(task,timeout=120)
+                except asyncio.TimeoutError:
+                    return JSONResponse({'error':'Проверка не завершилась за 120 секунд. Вердикт не сохранён; можно повторить с более быстрой моделью.'},status_code=408)
+                except asyncio.CancelledError:
+                    return JSONResponse({'error':'Проверка отменена. Вердикт не сохранён.'},status_code=409)
+                finally:
+                    review_tasks.pop(chat['id'],None)
             # The user may have removed the chat while the model was working.
             latest=store.get(chat["id"])
             if not latest:return JSONResponse({"error":"Диалог удалён"},status_code=404)
             latest["messages"][index]["claim_review"]=report
             store.save(latest)
             return JSONResponse(report)
+        except httpx.TimeoutException:
+            return JSONResponse({'error':'Модель не ответила за отведённое время. Неполный вердикт не сохранён.'},status_code=408)
         except (ValueError,ValidationError,httpx.HTTPError) as exc:
             return JSONResponse({"error":str(exc) if isinstance(exc,ValueError) else "Проверка модели не завершена"},status_code=400)
 
@@ -478,6 +496,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             asyncio.get_running_loop().call_later(.7, webbrowser.open, open_url)
         yield
         tasks = [run["task"] for run in runs.values() if not run["done"]]
+        tasks.extend(task for task in review_tasks.values() if not task.done())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -492,6 +511,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         Route("/api/exports/{checksum}", export_snapshot),
         Route("/api/index",index_control,methods=["GET","POST"]),
         Route("/api/chats/{chat_id}/verify",review_answer,methods=["POST"]),
+        Route("/api/chats/{chat_id}/verify/cancel",cancel_review,methods=["POST"]),
         Route("/api/account", account_settings, methods=["GET","POST"]),
         Route("/api/llm", model_settings, methods=["GET","POST"]),Route("/api/llm/check",check_model,methods=["POST"]),
         Route("/api/runs/{run_id}", run_status), Route("/api/runs/{run_id}/events", events), Route("/api/runs/{run_id}/{action}", control, methods=["POST"]),

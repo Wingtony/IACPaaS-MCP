@@ -217,19 +217,26 @@ def test_index_checks_dates_and_marks_offline_fallback(tmp_path):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("pointer,evidence,expected", [("/nodes","8","confirmed"),("/nodes","9","not_in_data"),("/missing","8","not_in_data")])
-def test_claim_verifier_downgrades_invented_source_bindings(monkeypatch,pointer,evidence,expected):
+def count_step():
+    from iacpaas_mcp.graph import counts
+    path='Учебные/База наблюдений'
+    graph=asyncio.run(MockBackend().export(path))
+    return {'name':'count_graph','arguments':{'path':path},'result':{**counts(graph),'_source':graph['_source']}}
+
+
+@pytest.mark.parametrize("pointer,expected", [("/nodes","confirmed"),("/missing","reference_error"),("/answer","reference_error")])
+def test_claim_verifier_downgrades_invented_source_bindings(monkeypatch,pointer,expected):
     async def complete(*args):
-        return {"message":{"content":json.dumps({"claims":[{"text":"Число вершин", "quote":"8 вершин", "status":"confirmed", "source_id":"T0", "pointer":pointer,"evidence":evidence}]})}}
+        return {"message":{"content":json.dumps({"claims":[{"quote":"8 вершин", "status":"confirmed", "source_id":"T0", "pointer":pointer}]})}}
     monkeypatch.setattr(verifier,"complete",complete)
-    report=asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[{"name":"count_graph","result":{"nodes":8}}],ModelConfig("deepseek","test","fake")))
+    report=asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[count_step()],ModelConfig("deepseek","test","fake")))
     assert report["claims"][0]["status"]==expected
     assert report["claims"][0]["binding_verified"] is (expected=="confirmed")
 
 
 def test_claim_verifier_rejects_fabricated_answer_quote(monkeypatch):
     async def complete(*args):
-        return {"message":{"content":json.dumps({"claims":[{"text":"Число", "quote":"9 вершин", "status":"not_in_data"}]})}}
+        return {"message":{"content":json.dumps({"claims":[{"quote":"9 вершин", "status":"not_in_data"}]})}}
     monkeypatch.setattr(verifier,"complete",complete)
     with pytest.raises(ValueError,match="цитату"):
-        asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[{"name":"count_graph","result":{"nodes":8}}],ModelConfig("deepseek","test","fake")))
+        asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[count_step()],ModelConfig("deepseek","test","fake")))

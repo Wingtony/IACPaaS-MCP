@@ -122,20 +122,34 @@ function renderMessages() {
         next.onclick=()=>{if(runId)return;$('question').value='Покажи следующие '+pageResult.limit;sendMessage();};footer.append(next);
       }
       if (message.status === 'done' && message.steps?.some(s=>!s.is_error)) {
-        const review=document.createElement('button'); review.className='copy-button'; review.textContent='Проверить утверждения';
-        review.title='Отдельный запрос к выбранной модели; облачная проверка оплачивается провайдеру';
-        review.onclick=async()=>{review.disabled=true;review.textContent='Проверяю…';try{
-          await api('/api/chats/'+current.id+'/verify',{method:'POST',body:JSON.stringify({index:messageIndex})});await selectChat(current.id);
-        }catch(error){toast(error.message);review.disabled=false;review.textContent='Проверить утверждения';}};
+        const review=document.createElement('button'); review.className='copy-button'; review.textContent='Проверить смысл · LLM';
+        review.title='Повторная сверка источников и выборочная проверка до 8 утверждений моделью, до 120 секунд. Облачный запрос оплачивается провайдеру.';
+        review.onclick=async()=>{
+          if(config.review_version!==2){toast('Перезапустите Web-приложение и обновите страницу: сервер использует старую проверку.');return;}
+          const chatId=current.id,started=Date.now();review.disabled=true;
+          const tick=()=>{review.textContent=`Проверка: ${Math.floor((Date.now()-started)/1000)} с / 120 с`;};tick();
+          const timer=setInterval(tick,1000),cancel=document.createElement('button');cancel.className='copy-button';cancel.textContent='Отменить проверку';footer.append(cancel);
+          cancel.onclick=async()=>{cancel.disabled=true;try{await api('/api/chats/'+chatId+'/verify/cancel',{method:'POST',body:'{}'});}catch(error){toast(error.message);cancel.disabled=false;}};
+          try{await api('/api/chats/'+chatId+'/verify',{method:'POST',body:JSON.stringify({index:messageIndex})});if(current?.id===chatId)await selectChat(chatId);else toast('Проверка завершена и сохранена');}
+          catch(error){toast(error.message);}
+          finally{clearInterval(timer);cancel.remove();review.disabled=false;review.textContent='Проверить смысл · LLM';}
+        };
         footer.append(review);
       }
       article.append(footer);
       if (message.claim_review) {
         const panel=document.createElement('details'); panel.className='verification';
         const report=message.claim_review;const summary=document.createElement('summary');
-        summary.textContent=`Проверка утверждений: ${report.confirmed} из ${report.total}`;panel.append(summary);
+        summary.textContent=report.version===2?`Смысловая проверка: подтверждено ${report.confirmed} из ${report.total}${report.reference_errors?' · ошибок ссылок: '+report.reference_errors:''}`:'Устаревший результат проверки — запустите новую';panel.append(summary);
         const notice=document.createElement('p');notice.textContent=report.notice;panel.append(notice);
-        for(const claim of report.claims){const p=document.createElement('p');p.textContent=`${claim.status}: ${claim.quote} — ${claim.evidence} (${claim.source_id}${claim.pointer})`;panel.append(p);}
+        if(report.version===2){
+          const labels={confirmed:'Поддерживается источником',not_in_data:'Недостаточно данных',contradicted:'Противоречит источнику',reference_error:'Ошибка ссылки проверяющего'};
+          const proof=document.createElement('p');proof.className='review-replay';proof.textContent=`Повторная сверка MCP: ${report.replay?.length||0} результатов · ${report.seconds} с`;panel.append(proof);
+          for(const claim of report.claims){const row=document.createElement('div');row.className='review-claim';const label=document.createElement('strong');label.textContent=labels[claim.status]||claim.status;
+            const quote=document.createElement('p');quote.textContent=claim.quote;row.append(label,quote);
+            if(claim.evidence){const evidence=document.createElement('p');evidence.className='review-evidence';evidence.textContent='Источник: '+claim.evidence;row.append(evidence);}
+            if(claim.pointer){const ref=document.createElement('small');ref.textContent=claim.source_id+claim.pointer;row.append(ref);}panel.append(row);}
+        }else{const legacy=document.createElement('p');legacy.textContent='Старая проверка смешивала ошибки формата ссылки с отсутствием данных и допускала ссылку на сам ответ. Этот результат нельзя считать достоверным.';panel.append(legacy);}
         article.append(panel);
       }
     }
