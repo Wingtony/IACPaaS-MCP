@@ -115,7 +115,29 @@ function renderMessages() {
       const footer = document.createElement('div'); footer.className = 'message-footer';
       const tokens = message.metrics?.tokens_out; footer.innerHTML = `<span>${message.seconds ?? 0} с</span>${tokens ? `<span>${tokens.toLocaleString('ru')} ${message.verification?.query_plan ? 'токенов плана' : 'токенов ответа'}</span>` : ''}<span>Вызовы MCP: ${(message.steps || []).length}</span>${message.context?.compressed ? `<span>Контекст сжат: ≈${message.context.before_estimate} → ≈${message.context.after_estimate}</span>` : ''}`;
       const copy = document.createElement('button'); copy.className = 'copy-button'; copy.innerHTML = icon('copy') + 'Копировать'; copy.onclick = () => navigator.clipboard.writeText(message.content).then(() => toast('Ответ скопирован')).catch(() => toast('Не удалось скопировать ответ'));
-      footer.append(copy); article.append(footer);
+      footer.append(copy);
+      const pageResult=[...(message.steps || [])].reverse().find(s=>s.name==='query_knowledge' && !s.is_error)?.result;
+      if(messageIndex===current.messages.length-1 && pageResult?.has_more && message.status==='done'){
+        const next=document.createElement('button');next.className='copy-button';next.textContent='Следующие '+pageResult.limit;
+        next.onclick=()=>{if(runId)return;$('question').value='Покажи следующие '+pageResult.limit;sendMessage();};footer.append(next);
+      }
+      if (message.status === 'done' && message.steps?.some(s=>!s.is_error)) {
+        const review=document.createElement('button'); review.className='copy-button'; review.textContent='Проверить утверждения';
+        review.title='Отдельный запрос к выбранной модели; облачная проверка оплачивается провайдеру';
+        review.onclick=async()=>{review.disabled=true;review.textContent='Проверяю…';try{
+          await api('/api/chats/'+current.id+'/verify',{method:'POST',body:JSON.stringify({index:messageIndex})});await selectChat(current.id);
+        }catch(error){toast(error.message);review.disabled=false;review.textContent='Проверить утверждения';}};
+        footer.append(review);
+      }
+      article.append(footer);
+      if (message.claim_review) {
+        const panel=document.createElement('details'); panel.className='verification';
+        const report=message.claim_review;const summary=document.createElement('summary');
+        summary.textContent=`Проверка утверждений: ${report.confirmed} из ${report.total}`;panel.append(summary);
+        const notice=document.createElement('p');notice.textContent=report.notice;panel.append(notice);
+        for(const claim of report.claims){const p=document.createElement('p');p.textContent=`${claim.status}: ${claim.quote} — ${claim.evidence} (${claim.source_id}${claim.pointer})`;panel.append(p);}
+        article.append(panel);
+      }
     }
     $('messages').append(article);
   }
@@ -211,14 +233,15 @@ async function openAccountSettings(){
 async function refreshStatus(){
   config=await api('/api/status');csrf=config.csrf;
   if(!current && !runId && config.context_length)$('context-indicator').textContent=`Контекст: ${config.context_length/1024}K · бюджет ≈${config.context_budget}`;
-  $('model-name').textContent=config.model;document.getElementById('model-location').textContent=config.cloud?'Облачный API':'Qwen на вашем ПК';$('composer-model').textContent=config.model+(config.cloud?' · облако':' · локально');
+  $('model-name').textContent=config.model;document.getElementById('model-location').textContent=config.cloud?'Облачный API':'Ваш сервер Ollama';$('composer-model').textContent=config.model+(config.cloud?' · облако':' · Ollama');
+  $('stop-app').disabled=!!config.docker;$('stop-app').title=config.docker?'Остановка контейнера: docker compose stop atlas. Ollama управляется отдельно.':'Остановить приложение';
   $('model-dot').classList.toggle('offline',!config.model_available);
   const mock=config.backend==='mock';
   $('workspace-name').textContent=mock?'Учебное пространство':'Фонд IACPaaS';$('workspace-description').textContent=mock?'Демонстрационные данные':'Ресурсы из конфигурации';
   $('welcome-note').textContent=mock?'Учебная база подключена. Можно исследовать.':'Настроено подключение к IACPaaS. Данные проверяются при запросе.';
   $('backend-hint').textContent=(mock?'Учебные данные':'IACPaaS')+` · MCP ${config.tools}`;
   $('connection-notice').hidden=config.model_available;
-  $('connection-notice').textContent=config.cloud?'Для облачной модели сохраните API-ключ в разделе «Модели и API».':'Qwen выключена. Чтобы начать диалог, запустите Start-Web.cmd.';
+  $('connection-notice').textContent=config.cloud?'Для облачной модели сохраните API-ключ в разделе «Модели и API».':'Ollama недоступна или модель не найдена. Укажите адрес Ollama и точное имя модели в разделе «Модели и API».';
   setState(runId?'Агент работает':config.model_available?(config.cloud?'Облако настроено · доступ не проверен':'Агент готов к работе'):'Модель выключена',!!runId);
 }
 $('new-chat').onclick=resetChat;$('search').oninput=history;$('composer').onsubmit=sendMessage;
@@ -261,7 +284,8 @@ function modelFields() {
   $('llm-key').value='';$('llm-delete-key').checked=false;$('llm-key').disabled=local;$('llm-delete-key').disabled=local;
   $('llm-key-status').textContent=local?'Ollama работает без API-ключа.':item.key_source==='environment'?'Ключ задан переменной окружения. Она имеет приоритет; удаление здесь затронет только сохранённую копию.':item.key_saved?'Ключ сохранён на сервере. Пустое поле оставит его прежним.':'Ключ ещё не сохранён.';
   $('llm-disclosure').hidden=local;$('llm-error').hidden=true;$('llm-test-result').textContent='';
-  $('llm-check').disabled=local||item.id!==modelSettings.provider;
+  $('llm-endpoint-label').hidden=!local;$('llm-endpoint').value=modelSettings.ollama_url||'';$('llm-endpoint').required=local;
+  $('llm-check').disabled=item.id!==modelSettings.provider;
 }
 async function openModelSettings() {
   try {
@@ -279,14 +303,28 @@ $('model-dialog').addEventListener('close',()=>{$('llm-key').value='';});
 $('model-form').onsubmit=async event=>{
   event.preventDefault();$('llm-save').disabled=true;$('llm-error').hidden=true;
   try {
-    modelSettings=await api('/api/llm',{method:'POST',body:JSON.stringify({provider:$('llm-provider').value,model:$('llm-model').value.trim(),api_key:$('llm-key').value.trim(),delete_key:$('llm-delete-key').checked})});
+    modelSettings=await api('/api/llm',{method:'POST',body:JSON.stringify({provider:$('llm-provider').value,model:$('llm-model').value.trim(),api_key:$('llm-key').value.trim(),delete_key:$('llm-delete-key').checked,...($('llm-provider').value==='ollama'?{ollama_url:$('llm-endpoint').value.trim()}:{})})});
     $('llm-key').value='';modelFields();await refreshStatus();$('question').dispatchEvent(new Event('input'));toast('Модель сохранена');
   } catch(error){$('llm-error').hidden=false;$('llm-error').textContent=error.message;}
   finally{$('llm-save').disabled=false;}
 };
 $('llm-check').onclick=async()=>{
   $('llm-check').disabled=true;$('llm-test-result').textContent='Проверяю сохранённую модель…';
-  try {const result=await api('/api/llm/check',{method:'POST',body:'{}'});$('llm-test-result').textContent=`API отвечает: ${result.model}. Токены: ${result.tokens_in} вход / ${result.tokens_out} выход.`;}
+  try {const result=await api('/api/llm/check',{method:'POST',body:'{}'});
+    if(result.local){$('llm-test-result').textContent=`Ollama доступна: ${result.endpoint}. ${result.available?'Модель найдена.':'Выбранная модель не найдена.'} Доступны: ${result.models.join(', ')||'нет установленных моделей'}`;$('llm-model-list').innerHTML=result.models.map(m=>`<option value="${escapeHTML(m)}"></option>`).join('');}
+    else $('llm-test-result').textContent=`API отвечает: ${result.model}. Токены: ${result.tokens_in} вход / ${result.tokens_out} выход.`;}
   catch(error){$('llm-test-result').textContent=error.message;}
   finally{$('llm-check').disabled=false;}
 };
+
+const atlasIndexButtons=document.createElement('div');atlasIndexButtons.className='index-controls';
+const atlasIndexStatus=document.createElement('pre');atlasIndexStatus.className='index-status';
+for(const [label,force] of [['Сверить изменения IACPaaS',false],['Загрузить все ресурсы заново',true]]){
+ const button=document.createElement('button');button.className='copy-button';button.textContent=label;
+ button.onclick=async()=>{button.disabled=true;atlasIndexStatus.textContent='Сверяю ресурсы…';try{
+ const result=await api('/api/index',{method:'POST',body:JSON.stringify({force})});
+ atlasIndexStatus.textContent=result.resources.map(r=>`${r.path}: ${r.status}${r.source?.retrieved_at?' · снимок '+r.source.retrieved_at:''}${r.error?' · '+r.error:''}`).join('\n');
+ }catch(error){atlasIndexStatus.textContent=error.message;}finally{button.disabled=false;}};
+ atlasIndexButtons.append(button);
+}
+$('resources').before(atlasIndexButtons,atlasIndexStatus);

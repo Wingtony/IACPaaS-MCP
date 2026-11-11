@@ -1,4 +1,5 @@
 """Native Ollama tool calling + official MCP SDK. No cloud keys required."""
+from .paths import ENV_FILE, LOGS, ollama_url as configured_ollama_url
 import argparse
 import asyncio
 import json
@@ -63,6 +64,7 @@ async def run_agent(client, question, model, ollama_url, trace_file, max_steps=1
     from .llm import get_config
     llm_config = llm_config or get_config(default_model=model)
     model = llm_config.model
+    ollama_url = llm_config.endpoint or ollama_url
     if mode not in {'adaptive','knowledge','raw'}:
         raise ValueError('Неизвестный режим агента')
     if llm_config.cloud and mode == "raw":
@@ -216,15 +218,9 @@ async def _run_agent(client, question, model, ollama_url, trace_file, max_steps=
                     data = {"is_error": result.is_error, **result_data(result)}
                     if data.get("status") == "pending_confirmation":
                         token = data.pop("confirm_token")
-                        approved = approve(data) if approve else input(
-                            json.dumps(data["preview"], ensure_ascii=False, indent=2) + "\nВыполнить изменение? Введите ДА: ") == "ДА"
-                        if inspect.isawaitable(approved):
-                            approved = await approved
-                        if approved:
-                            result = await client.call_tool(name, {**args, "confirm_token": token})
-                            data = {"is_error": result.is_error, **result_data(result)}
-                        else:
-                            data = {"status": "cancelled", "message": "Пользователь отклонил изменение"}
+                        # MCP elicitation performs the single human confirmation.
+                        result = await client.call_tool(name, {**args, "confirm_token": token})
+                        data = {"is_error": result.is_error, **result_data(result)}
                 model_data = data
                 if name in {"update_concept", "import_inforesource"}:
                     write_outcomes.append(data)
@@ -242,9 +238,10 @@ async def _run_agent(client, question, model, ollama_url, trace_file, max_steps=
 
 
 async def main_async(args):
+    from .confirmation import elicitation_handler
     from .llm import get_config
     selected = get_config(provider=args.provider, model=args.model)
-    trace = PROJECT / "logs" / ("agent-" + uuid.uuid4().hex[:10] + ".jsonl")
+    trace = LOGS / ("agent-" + uuid.uuid4().hex[:10] + ".jsonl")
     if args.mcp_url:
         import httpx2
         from mcp.client.streamable_http import streamable_http_client
@@ -252,12 +249,12 @@ async def main_async(args):
         if not token:
             raise ValueError("Для HTTP задайте MCP_BEARER_TOKEN")
         async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + token}) as http:
-            async with Client(streamable_http_client(args.mcp_url, http_client=http)) as client:
+            async with Client(streamable_http_client(args.mcp_url, http_client=http), elicitation_callback=elicitation_handler()) as client:
                 answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected, mode=args.mode, max_steps=args.max_steps)
     else:
         params = StdioServerParameters(command=sys.executable, args=["-m", "iacpaas_mcp.server"],
                                        cwd=str(PROJECT), env=dict(os.environ))
-        async with Client(params) as client:
+        async with Client(params, elicitation_callback=elicitation_handler()) as client:
             answer = await run_agent(client, args.question, selected.model, args.ollama_url, trace, llm_config=selected, mode=args.mode, max_steps=args.max_steps)
     print(answer)
     print(f"\nТрасса: {trace}", file=sys.stderr)
@@ -266,7 +263,7 @@ async def main_async(args):
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
-    load_dotenv(PROJECT / ".env")
+    load_dotenv(ENV_FILE)
     parser = argparse.ArgumentParser()
     parser.add_argument("question", nargs="?", default="Какие базы доступны? Посчитай вершины и дуги в первой базе.")
     parser.add_argument("--provider", choices=["ollama","openai","anthropic","gemini","deepseek","openrouter"], default=None)

@@ -3,7 +3,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-SNAPSHOTS = Path(__file__).resolve().parent.parent / "logs" / "exports"
+from .paths import LOGS
+SNAPSHOTS = LOGS / "exports"
 
 
 def capture(graph, path, backend, depth):

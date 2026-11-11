@@ -7,6 +7,7 @@ import httpx
 from dotenv import set_key
 
 from .server import PROJECT
+from .paths import ENV_FILE
 from .credentials import load_account, save_account
 
 
@@ -34,7 +35,8 @@ def connect_account(username, password, paths=None, transport=None):
         password = saved["password"]
     token = signin(username, password, transport=transport)
     save_account(username, password, token)
-    env_path = PROJECT / ".env"
+    env_path = ENV_FILE
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     if not env_path.exists():
         env_path.write_text((PROJECT / ".env.example").read_text(encoding="utf-8"), encoding="utf-8")
     for key, value in {"IACPAAS_JWT":"", "IACPAAS_API_KEY":"", "IACPAAS_BACKEND":"http", "IACPAAS_ALLOW_WRITE":"false"}.items():
@@ -57,7 +59,7 @@ def main():
         raise SystemExit("Вход не выполнен. Проверьте данные аккаунта и доступность платформы.") from None
     finally:
         password = None
-    print("Вход выполнен. Логин, пароль и JWT сохраняются зашифрованными средствами Windows.")
+    print("Вход выполнен. Логин, пароль и JWT сохраняются в локальном зашифрованном хранилище.")
     print("Настройки сохранены. Перезапустите веб-приложение. Запись в реальную базу выключена.")
 
 

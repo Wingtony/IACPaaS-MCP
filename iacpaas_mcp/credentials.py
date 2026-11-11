@@ -5,7 +5,9 @@ import os
 from ctypes import wintypes
 from pathlib import Path
 
-ACCOUNT_FILE = Path(__file__).resolve().parent.parent / ".local" / "account.dpapi"
+from .paths import DATA
+ACCOUNT_FILE = DATA / "account.dpapi"
+KEY_FILE = DATA / "secrets.key"
 
 
 class Blob(ctypes.Structure):
@@ -14,7 +16,25 @@ class Blob(ctypes.Structure):
 
 def protect(data, decrypt=False):
     if os.name != "nt":
-        raise ValueError("Сохранение пароля поддерживается только через Windows DPAPI")
+        from cryptography.fernet import Fernet, InvalidToken
+        import stat
+        KEY_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not KEY_FILE.exists():
+            if decrypt:
+                raise ValueError("Нет локального ключа хранилища")
+            try:
+                fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as handle: handle.write(Fernet.generate_key())
+            except FileExistsError:
+                pass
+        info = KEY_FILE.lstat()
+        if stat.S_ISLNK(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077 or info.st_uid != os.getuid():
+            raise ValueError("Ключ должен принадлежать текущему пользователю и иметь права 0600")
+        try:
+            cipher = Fernet(KEY_FILE.read_bytes())
+            return cipher.decrypt(data) if decrypt else cipher.encrypt(data)
+        except (InvalidToken, ValueError):
+            raise ValueError("Не удалось прочитать локальное зашифрованное хранилище") from None
     library = ctypes.WinDLL("crypt32", use_last_error=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     buffer = ctypes.create_string_buffer(data)
@@ -46,7 +66,7 @@ def load_account():
     try:
         return json.loads(protect(ACCOUNT_FILE.read_bytes(), decrypt=True).decode("utf-8"))
     except (ValueError, OSError):
-        raise ValueError("Не удалось открыть сохранённый аккаунт. Войдите заново под текущим пользователем Windows.") from None
+        raise ValueError("Не удалось открыть сохранённый аккаунт. Войдите заново под текущим пользователем ОС.") from None
 
 
 def save_account(username, password, token):
@@ -55,6 +75,7 @@ def save_account(username, password, token):
     ACCOUNT_FILE.parent.mkdir(parents=True, exist_ok=True)
     temp = ACCOUNT_FILE.with_suffix(".tmp")
     temp.write_bytes(encrypted)
+    if os.name != "nt": temp.chmod(0o600)
     temp.replace(ACCOUNT_FILE)
 
 

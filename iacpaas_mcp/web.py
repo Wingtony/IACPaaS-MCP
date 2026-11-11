@@ -1,5 +1,7 @@
 """Loopback web UI for the existing MCP/Qwen agent."""
+from .paths import ENV_FILE, LOGS, ollama_url as configured_ollama_url
 import argparse
+import base64
 import asyncio
 import json
 import logging
@@ -24,6 +26,7 @@ from pydantic import ValidationError
 
 from .agent import run_agent, unload_model
 from .context import context_settings
+from .confirmation import elicitation_handler
 from .server import PROJECT, build_server
 from .provenance import SNAPSHOTS
 from .auth import connect_account
@@ -69,14 +72,27 @@ class Store:
 
 
 def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,instance_id=""):
-    load_dotenv(PROJECT / ".env")
-    store = Store(db_path or PROJECT / "logs" / "web.sqlite3")
+    if os.getenv('ATLAS_DOCKER','false').lower()=='true':
+        from .paths import load_environment
+        load_environment(override=True)
+    else:
+        load_dotenv(ENV_FILE, override=True)
+    host_list=json.loads(os.getenv('ATLAS_ALLOWED_HOSTS','["localhost","127.0.0.1","::1"]'))
+    if not isinstance(host_list,list) or not all(isinstance(h,str) and h and h==h.lower() and '/' not in h and '*' not in h for h in host_list):
+        raise ValueError('ATLAS_ALLOWED_HOSTS должен содержать точные имена/IP в нижнем регистре, без URL и масок')
+    allowed_hosts=set(host_list)
+    password=os.getenv('ATLAS_PASSWORD','')
+    username=os.getenv('ATLAS_USERNAME','atlas')
+    if not username or ':' in username: raise ValueError('Нужно непустое ATLAS_USERNAME без двоеточия')
+    if (allowed_hosts-{'localhost','127.0.0.1','::1'} or os.getenv('ATLAS_DOCKER','false').lower()=='true') and len(password)<16:
+        raise ValueError('Для сетевого доступа задайте ATLAS_PASSWORD длиной не менее 16 символов')
+    store = Store(db_path or LOGS / "web.sqlite3")
     mcp = server or build_server()
     csrf = secrets.token_urlsafe(32)
     runs = {}
     lock = asyncio.Lock()
     model = os.getenv("OLLAMA_MODEL", "qwen-agent")
-    ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11435")
+    ollama_url = configured_ollama_url()
 
     async def publish(run, event):
         event = {**event, "at": time.time()}
@@ -124,9 +140,9 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
                 await publish(run, {"event": "started"})
                 history = [{"role": message["role"], "content": message["content"], "query_plan":message.get("verification",{}).get("query_plan"),"selection":message.get("verification",{}).get("selection",[])}
                            for message in chat["messages"][:-1] if message.get("status", "done") == "done"]
-                async with Client(mcp) as client:
+                async with Client(mcp, elicitation_callback=elicitation_handler(approve)) as client:
                     answer = await run_agent(client, chat["messages"][-1]["content"], selected.model, ollama_url,
-                                             PROJECT / "logs" / ("web-" + run["id"] + ".jsonl"),
+                                             LOGS / ("web-" + run["id"] + ".jsonl"),
                                              history=history, on_event=event, approve=approve,
                                              resource_path=run.get("resource_path", ""), llm_config=selected)
             message = {"role": "assistant", "content": answer, "status": "done"}
@@ -161,6 +177,8 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         return JSONResponse({"running":True,"application":"iacpaas-atlas","pid":os.getpid(),"instance_id":instance_id})
 
     async def stop_application(request):
+        if os.getenv('ATLAS_DOCKER','false').lower()=='true':
+            return JSONResponse({"error":"Контейнер останавливается командой docker compose stop atlas; Ollama управляется отдельно"},status_code=409)
         if shutdown_callback is None:
             return JSONResponse({"error":"Остановка доступна при штатном запуске приложения"},status_code=409)
         for run in runs.values():
@@ -176,7 +194,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             if selected.cloud:
                 raise ValueError("Cloud mode does not probe Ollama")
             async with httpx.AsyncClient(timeout=2) as http:
-                response = await http.get(ollama_url.rstrip("/") + "/api/tags")
+                response = await http.get(selected.ollama_url + "/api/tags")
                 response.raise_for_status()
                 names = [item["name"] for item in response.json().get("models", [])]
                 online = True
@@ -190,7 +208,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         window,input_budget,output_limit=context_settings()
         return JSONResponse({"context_length":window,"context_budget":input_budget,"output_limit":output_limit,"csrf": csrf, "model": selected.model, "provider":selected.provider, "cloud":selected.cloud, "online": online, "model_available": model_available,
                              "backend": os.getenv("IACPAAS_BACKEND", "mock"), "tools": len(tools),
-                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true"})
+                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true'})
 
     async def model_settings(request):
         if request.method == "GET":
@@ -201,16 +219,23 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             previous = get_config(default_model=model)
             save_settings(await request.json())
             current = get_config(default_model=model)
-            if shutdown_callback is not None and not previous.cloud and (current.cloud or previous.model != current.model):
-                await unload_model(previous.model,ollama_url)
+            if shutdown_callback is not None and os.getenv('ATLAS_MANAGE_OLLAMA','true').lower()=='true' and not previous.cloud and (current.cloud or previous.model != current.model or previous.endpoint != current.endpoint):
+                await unload_model(previous.model,previous.ollama_url)
             return JSONResponse(public_settings(model))
         except (ValueError, TypeError, OSError):
-            return JSONResponse({"error":"Не удалось сохранить настройки. Проверьте провайдера, API ID и ключ; требуется Windows DPAPI."},status_code=400)
+            return JSONResponse({"error":"Не удалось сохранить настройки. Проверьте провайдера, API ID, ключ и доступ к локальному хранилищу."},status_code=400)
 
     async def check_model(request):
         selected = get_config(default_model=model)
         if not selected.cloud:
-            return JSONResponse({"error":"Для локальной Qwen проверьте индикатор доступности Ollama"},status_code=400)
+            try:
+                async with httpx.AsyncClient(timeout=10,follow_redirects=False) as http:
+                    response=await http.get(selected.ollama_url+'/api/tags');response.raise_for_status()
+                names=[m['name'] for m in response.json().get('models',[])]
+                found=any(n.removesuffix(':latest')==selected.model.removesuffix(':latest') for n in names)
+                return JSONResponse({'model':selected.model,'endpoint':selected.ollama_url,'models':names,'available':found,'local':True})
+            except (httpx.HTTPError,ValueError,KeyError):
+                return JSONResponse({'error':'Контейнер не может подключиться к Ollama. Проверьте адрес ПК, OLLAMA_HOST, порт и firewall.'},status_code=400)
         if lock.locked():
             return JSONResponse({"error":"Дождитесь завершения текущего запроса"},status_code=409)
         # Explicit user action: a tiny billable API call, without history or DB.
@@ -372,6 +397,47 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
                 return JSONResponse({"error": "Не удалось прочитать ИР. Проверьте путь и доступ"}, status_code=502)
         return JSONResponse(result.structured_content)
 
+    verification_lock = asyncio.Lock()
+
+    async def review_answer(request):
+        chat=store.get(request.path_params["chat_id"])
+        if not chat: return JSONResponse({"error":"Диалог не найден"},status_code=404)
+        if active(chat["id"]): return JSONResponse({"error":"Дождитесь окончания ответа"},status_code=409)
+        if verification_lock.locked() or lock.locked(): return JSONResponse({"error":"Модель занята. Повторите позже"},status_code=409)
+        try:
+            data=await request.json()
+            if not isinstance(data,dict): raise ValueError("Нужен JSON-объект")
+            index=data.get("index")
+            if type(index) is not int or not 0<=index<len(chat["messages"]): raise ValueError("Неверный индекс ответа")
+            message=chat["messages"][index]
+            if message["role"]!="assistant" or message.get("status")!="done": raise ValueError("Нужен завершённый ответ")
+            question=next((m["content"] for m in reversed(chat["messages"][:index]) if m["role"]=="user"),"")
+            from .verifier import verify_answer
+            async with verification_lock, lock:
+                report=await verify_answer(question,message["content"],message.get("steps",[]),get_config(default_model=model))
+            # The user may have removed the chat while the model was working.
+            latest=store.get(chat["id"])
+            if not latest:return JSONResponse({"error":"Диалог удалён"},status_code=404)
+            latest["messages"][index]["claim_review"]=report
+            store.save(latest)
+            return JSONResponse(report)
+        except (ValueError,ValidationError,httpx.HTTPError) as exc:
+            return JSONResponse({"error":str(exc) if isinstance(exc,ValueError) else "Проверка модели не завершена"},status_code=400)
+
+    async def index_control(request):
+        if request.method=="POST" and lock.locked(): return JSONResponse({"error":"Дождитесь окончания запроса"},status_code=409)
+        force=False
+        if request.method=="POST":
+            try:
+                data=await request.json()
+                if not isinstance(data,dict) or type(data.get('force',False)) is not bool: raise ValueError()
+                force=data.get('force',False)
+            except ValueError: return JSONResponse({"error":"Нужен JSON-объект с force: true/false"},status_code=400)
+        async with lock:
+            async with Client(mcp) as client:
+                result=await client.call_tool("sync_resources",{"force":force}) if request.method=="POST" else await client.call_tool("index_status",{})
+        return JSONResponse(result.structured_content,status_code=502 if result.is_error else 200)
+
     async def export_snapshot(request):
         checksum = request.path_params["checksum"]
         if len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum):
@@ -399,7 +465,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             if not isinstance(paths,list) or len(paths)>100 or not all(isinstance(path,str) and 1<=len(path)<=500 for path in paths):
                 raise ValueError("Пути баз должны быть списком непустых строк длиной до 500 символов")
             await asyncio.to_thread(connect_account, username, password, paths)
-            load_dotenv(PROJECT / ".env",override=True)
+            load_dotenv(ENV_FILE,override=True)
             mcp = build_server()
             return JSONResponse({**account_status(), "paths":paths})
         except (ValueError, httpx.HTTPError, OSError):
@@ -415,23 +481,33 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        if shutdown_callback is not None:
+        if shutdown_callback is not None and os.getenv('ATLAS_MANAGE_OLLAMA','true').lower()=='true':
             selected = get_config(default_model=model)
-            await unload_model(model if selected.cloud else selected.model,ollama_url)
+            if not selected.cloud: await unload_model(selected.model,selected.ollama_url)
 
     app = Starlette(lifespan=lifespan, routes=[Route("/", index), Route("/api/health",health),Route("/api/app/stop",stop_application,methods=["POST"]),Route("/api/status", status),
         Route("/api/chats", chats, methods=["GET", "POST"]), Route("/api/chats/{chat_id}", chat_item, methods=["GET", "DELETE"]),
         Route("/api/chats/{chat_id}/branch", branch_chat, methods=["POST"]),
         Route("/api/chat", send, methods=["POST"]), Route("/api/resources", resources), Route("/api/resource", resource_detail),
         Route("/api/exports/{checksum}", export_snapshot),
+        Route("/api/index",index_control,methods=["GET","POST"]),
+        Route("/api/chats/{chat_id}/verify",review_answer,methods=["POST"]),
         Route("/api/account", account_settings, methods=["GET","POST"]),
         Route("/api/llm", model_settings, methods=["GET","POST"]),Route("/api/llm/check",check_model,methods=["POST"]),
         Route("/api/runs/{run_id}", run_status), Route("/api/runs/{run_id}/events", events), Route("/api/runs/{run_id}/{action}", control, methods=["POST"]),
         Mount("/static", StaticFiles(directory=STATIC), name="static")])
 
     async def local_only(request: Request, call_next):
-        if request.url.hostname not in {"127.0.0.1", "localhost"}:
-            return JSONResponse({"error": "Только локальный доступ"}, status_code=403)
+        if request.url.hostname not in allowed_hosts|{'localhost','127.0.0.1','::1'}:
+            return JSONResponse({"error": "Адрес отсутствует в ATLAS_ALLOWED_HOSTS"}, status_code=403)
+        if password and request.url.path!='/api/health':
+            try:
+                kind,token=request.headers.get('authorization','').split(' ',1)
+                supplied_user,supplied_password=base64.b64decode(token,validate=True).decode('utf-8').split(':',1)
+                authorized=kind.lower()=='basic' and secrets.compare_digest(supplied_user.encode(),username.encode()) and secrets.compare_digest(supplied_password.encode(),password.encode())
+            except (ValueError,UnicodeError): authorized=False
+            if not authorized:
+                return JSONResponse({'error':'Требуется вход в АТЛАС'},status_code=401,headers={'WWW-Authenticate':'Basic realm="Atlas", charset="UTF-8"'})
         origin = request.headers.get("origin")
         if origin and origin != f"{request.url.scheme}://{request.headers.get('host')}":
             return JSONResponse({"error": "Недопустимый источник запроса"}, status_code=403)
@@ -457,6 +533,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8770)
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--open-browser", action="store_true")
     parser.add_argument("--instance-id",default="")
     args = parser.parse_args()
@@ -466,7 +543,7 @@ def main():
     def shutdown():
         if instance:instance.should_exit=True
     app=create_app(open_url=f"http://127.0.0.1:{args.port}" if args.open_browser else None,shutdown_callback=shutdown,instance_id=args.instance_id)
-    instance=uvicorn.Server(uvicorn.Config(app,host="127.0.0.1",port=args.port))
+    instance=uvicorn.Server(uvicorn.Config(app,host=args.host,port=args.port))
     instance.run()
 
 

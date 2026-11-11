@@ -49,7 +49,7 @@ def decision_schema(definitions, allowed_paths=None):
         args.get('properties', {}).pop('confirm_token', None)
         args['required'] = [k for k in args.get('required', []) if k != 'confirm_token']
         properties = args.get('properties', {})
-        if allowed_paths and 'path' in properties:
+        if allowed_paths and 'path' in properties and tool.name not in {'update_concept','delete_inforesource'}:
             properties['path']['enum'] = list(allowed_paths)
         if tool.name == 'get_subgraph':
             properties['root']['description'] = 'Путь вершины из matches[].path; path остаётся путём ИР. Для корня всего ИР укажите пустую строку.'
@@ -88,6 +88,9 @@ def diagnostic(code, message, suggestion='Исправьте аргументы 
 def check_resource_path(call, allowed_paths, seen_roots):
     """Explain resource/vertex confusion using observed data, never guess or execute a repair."""
     if not isinstance(call, dict) or not isinstance(call.get('arguments'), dict):
+        return
+    if call.get('tool') in {'update_concept','delete_inforesource'}:
+        # Mutation scope is decided by the server, including newly created own resources.
         return
     args = call['arguments']
     path = args.get('path')
@@ -230,6 +233,8 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
             if identity in write_results:
                 outcome=write_results[identity]
                 rendered.append('Изменение выполнено.' if outcome['status']=='done' else 'Изменение отменено пользователем.')
+                if outcome.get('result',{}).get('path') or outcome.get('result',{}).get('warning'):
+                    rendered.append('Результат операции сервера:\n\n```json\n'+json.dumps(outcome['result'],ensure_ascii=False,indent=2)+'\n```')
                 continue
             record=store.records[identity];data=record['data']
             if digest(data)!=record['sha256']: raise ValueError('Источник изменён после получения')
@@ -237,6 +242,9 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                 if data['plan']['operation']=='catalog': raise ValueError('Каталог — вспомогательный источник; выберите результат предметного запроса')
                 if not verify_result(data,allowed_paths): raise ValueError('Верификация предметного результата не пройдена')
                 complete_result &= verification_status(data)=='verified_result'
+            elif record['tool'] in {'index_status','sync_resources','validate_tree','validate_resource'}:
+                # These are service diagnostics, not independently replayable database facts.
+                complete_result = False
             elif not verify_derivation(record):
                 raise ValueError('Верификация по исходному снимку не пройдена')
             complete_result &= data.get('complete',True) and not data.get('truncated',False)
@@ -249,7 +257,7 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                 'scope':scope,'meaning_verified':False,'complete':bool(complete_result),'claims':[],
                 'sources':[{**{k:v for k,v in r.items() if k!='data'},'export':r['data'].get('_source'),'exports':r['data'].get('_sources',[])} for r in selected],
                 'assessment':assessment,'notice':'Поля и расчёты сверены с источниками. Достаточность оценена агентом; правильность понимания вопроса не гарантируется.'}
-        if last: report.update(query_plan=last['plan'],rows=len(last['rows']),selection=[str(row[0]) for row in last['rows'] if row])
+        if last: report.update(query_plan={**last['plan'], 'dataset':last.get('dataset','')},rows=len(last['rows']),selection=[str(row[0]) for row in last['rows'] if row])
         trace({'event':'verification',**report});await emit({'event':'verification',**report})
         trace({'event':'answer','answer':answer});await emit({'event':'answer','answer':answer,'tokens_in':tokens_in,'tokens_out':tokens_out})
         return answer
@@ -301,8 +309,8 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                     args['resource_path']=resource_path
                     await emit({'event':'plan','plan':args['plan']})
                 elif name=='search_resources':args['resource_path']=resource_path
-                if 'path' in args and args['path'] not in allowed_paths:raise ValueError('Путь вне подключённой области: получите точный путь через list_inforesources')
-                root=args.get('root') or args.get('concept_path','')
+                if name not in {'create_folder','create_resource','delete_inforesource','update_concept','import_inforesource'} and 'path' in args and args['path'] not in allowed_paths:raise ValueError('Путь вне подключённой области: получите точный путь через list_inforesources')
+                root=args.get('root') or (args.get('concept_path','') if name=='update_concept' else '')
                 if root and root not in seen_roots.get(args.get('path'),set()):raise ValueError('Путь вершины не получен из данных. Сначала query_graph/search_resources')
                 key=json.dumps([name,args],sort_keys=True,ensure_ascii=False)
                 repeats[key]=repeats.get(key,0)+1
@@ -319,19 +327,16 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                     if data.get('status')=='pending_confirmation':
                         token=data.pop('confirm_token')
                         preview=copy.deepcopy(data)
-                        if approve:
-                            approved=approve(preview)
-                            if inspect.isawaitable(approved):approved=await approved
-                        else:
-                            import asyncio
-                            approved=await asyncio.to_thread(input,json.dumps(preview['preview'],ensure_ascii=False)+'\nВыполнить изменение? Введите ДА: ')
-                            approved=approved=='ДА'
-                        if approved is True:
-                            result=await client.call_tool(name,{**args,'confirm_token':token});data=result_data(result);failed=result.is_error
-                        else:data={'status':'cancelled'};failed=False
+                        # The server asks the MCP client's human callback. A token alone cannot approve a write.
+                        result=await client.call_tool(name,{**args,'confirm_token':token});data=result_data(result);failed=result.is_error
                     data.pop('confirm_token',None)
+                    if data.get('status')=='done':
+                        fresh=result_data(await client.call_tool('list_inforesources',{'limit':100}))['paths']
+                        for p in fresh:
+                            if p not in allowed_paths:allowed_paths.append(p);seen_roots[p]={''}
+                        schema=compact_schema(decision_schema(definitions, allowed_paths));validator=Draft202012Validator(schema)
                 if not failed and name in tools:
-                    if name in {'update_concept','import_inforesource'}:
+                    if name in {'update_concept','import_inforesource','create_folder','create_resource','delete_inforesource'}:
                         identity='W'+str(len(write_results)+1);write_results[identity]=copy.deepcopy(data)
                     else:
                         identity=store.add(name,args,data)

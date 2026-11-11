@@ -1,4 +1,5 @@
 """Local start/stop control. Stop only this app; never kill processes by name."""
+from .paths import ENV_FILE, LOGS, ollama_url as configured_ollama_url
 import argparse
 import json
 import os
@@ -8,6 +9,10 @@ import subprocess
 import sys
 import time
 import uuid
+import shutil
+import signal
+from urllib.parse import urlsplit
+from .paths import DATA
 import webbrowser
 
 import httpx
@@ -17,7 +22,7 @@ from .context import context_settings
 from .llm import get_config
 
 ROOT=Path(__file__).resolve().parents[1]
-STATE=ROOT/".local/runtime.json"
+STATE=DATA/"runtime.json"
 WEB="http://127.0.0.1:8770"
 HIDDEN=0x08000000 if os.name=="nt" else 0
 
@@ -32,10 +37,16 @@ def healthy():
 
 def owned_process(record):
     """A stale/reused PID cannot authorize terminating an unrelated Python process."""
-    if os.name!="nt" or not isinstance(record,dict) or type(record.get("pid")) is not int or record["pid"]<=0 or not re.fullmatch(r"[a-f0-9]{32}",str(record.get("instance_id",""))):
+    if not isinstance(record,dict) or type(record.get("pid")) is not int or record["pid"]<=0 or not re.fullmatch(r"[a-f0-9]{32}",str(record.get("instance_id",""))):
         return False
     try:
         pid=record["pid"]
+        if os.name != "nt":
+            if Path(f"/proc/{pid}/cmdline").exists():
+                command_line=Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00",b" ").decode("utf-8",errors="replace")
+            else:
+                command_line=subprocess.run(["ps","-p",str(pid),"-o","command="],capture_output=True,text=True,timeout=5).stdout
+            return "iacpaas_mcp.web" in command_line and ("--instance-id "+record["instance_id"]) in command_line
         command=f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object -ExpandProperty CommandLine"
         reply=subprocess.run(["powershell.exe","-NoProfile","-Command",command],capture_output=True,text=True,timeout=5,creationflags=HIDDEN)
         return "iacpaas_mcp.web" in reply.stdout and ("--instance-id "+record.get("instance_id","INVALID")) in reply.stdout
@@ -43,19 +54,43 @@ def owned_process(record):
         return False
 
 
+def ensure_ollama():
+    url=configured_ollama_url()
+    try:
+        httpx.get(url+"/api/tags",timeout=3).raise_for_status()
+        return
+    except httpx.HTTPError:
+        pass
+    host=urlsplit(url)
+    executable=shutil.which("ollama")
+    if host.hostname not in {"127.0.0.1","localhost"} or not executable:
+        raise RuntimeError("Запустите Ollama по OLLAMA_URL или выберите облачную модель")
+    env={**os.environ,"OLLAMA_HOST":host.netloc,"OLLAMA_CONTEXT_LENGTH":"32768","OLLAMA_NUM_PARALLEL":"1"}
+    with (LOGS/"ollama.stdout.log").open("ab") as out,(LOGS/"ollama.stderr.log").open("ab") as err:
+        subprocess.Popen([executable,"serve"],env=env,stdout=out,stderr=err,start_new_session=True)
+    for _ in range(40):
+        try:
+            httpx.get(url+"/api/tags",timeout=2).raise_for_status();return
+        except httpx.HTTPError: time.sleep(.25)
+    raise RuntimeError("Ollama не ответила; проверьте logs/ollama.stderr.log")
+
+
 def start_app(open_browser=True, progress=lambda message:None):
-    load_dotenv(ROOT/".env",override=True)
+    load_dotenv(ENV_FILE,override=True)
     cloud = get_config().cloud
-    (ROOT/"logs").mkdir(exist_ok=True)
+    LOGS.mkdir(parents=True,exist_ok=True)
     if not healthy():
         if not cloud:
             progress("Запускаю службу Ollama…")
-            startup=subprocess.run(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(ROOT/"Start-Ollama.ps1")],capture_output=True,timeout=90,creationflags=HIDDEN)
-            if startup.returncode:
-                raise RuntimeError("Ollama не запустилась. Проверьте logs/ollama.stderr.log.")
+            if os.name == "nt":
+                startup=subprocess.run(["powershell.exe","-NoProfile","-ExecutionPolicy","Bypass","-File",str(ROOT/"Start-Ollama.ps1")],capture_output=True,timeout=90,creationflags=HIDDEN)
+                if startup.returncode:
+                    raise RuntimeError("Ollama не запустилась. Проверьте logs/ollama.stderr.log.")
+            else:
+                ensure_ollama()
         progress("Запускаю веб-интерфейс…")
         instance=uuid.uuid4().hex
-        with (ROOT/"logs/web.stdout.log").open("ab") as stdout,(ROOT/"logs/web.stderr.log").open("ab") as stderr:
+        with (LOGS/"web.stdout.log").open("ab") as stdout,(LOGS/"web.stderr.log").open("ab") as stderr:
             process=subprocess.Popen([sys.executable,"-X","utf8","-m","iacpaas_mcp.web","--port","8770","--instance-id",instance],cwd=ROOT,stdout=stdout,stderr=stderr,creationflags=HIDDEN)
         STATE.parent.mkdir(exist_ok=True)
         STATE.write_text(json.dumps({"pid":process.pid,"instance_id":instance}),encoding="utf-8")
@@ -76,14 +111,14 @@ def start_app(open_browser=True, progress=lambda message:None):
     context,_,output=context_settings()
     options={"num_ctx":context,"num_predict":output}
     if os.getenv("AGENT_GPU_LAYERS"):options["num_gpu"]=int(os.environ["AGENT_GPU_LAYERS"])
-    url=os.getenv("OLLAMA_URL","http://127.0.0.1:11435")
+    url=configured_ollama_url()
     response=httpx.post(url+"/api/generate",json={"model":os.getenv("OLLAMA_MODEL","qwen-agent"),"keep_alive":-1,"options":options},timeout=180)
     response.raise_for_status()
     return "Web и Qwen запущены. Модель остаётся в памяти до остановки."
 
 
 def stop_app(progress=lambda message:None):
-    load_dotenv(ROOT/".env",override=True)
+    load_dotenv(ENV_FILE,override=True)
     progress("Останавливаю веб-интерфейс и текущие запросы…")
     try:
         status=httpx.get(WEB+"/api/status",timeout=5)
@@ -95,12 +130,15 @@ def stop_app(progress=lambda message:None):
         try:record=json.loads(STATE.read_text(encoding="utf-8"))
         except (OSError,ValueError):record={}
         if owned_process(record):
-            subprocess.run(["powershell.exe","-NoProfile","-Command",f"Stop-Process -Id {record['pid']}"],timeout=10,creationflags=HIDDEN,check=True)
+            if os.name == "nt":
+                subprocess.run(["powershell.exe","-NoProfile","-Command",f"Stop-Process -Id {record['pid']}"],timeout=10,creationflags=HIDDEN,check=True)
+            else:
+                os.kill(record["pid"], signal.SIGTERM)
     for _ in range(60):
         if not healthy():break
         time.sleep(.3)
     progress("Освобождаю память Qwen…")
-    url=os.getenv("OLLAMA_URL","http://127.0.0.1:11435")
+    url=configured_ollama_url()
     model=os.getenv("OLLAMA_MODEL","qwen-agent")
     try:
         httpx.post(url+"/api/generate",json={"model":model,"keep_alive":0},timeout=30).raise_for_status()

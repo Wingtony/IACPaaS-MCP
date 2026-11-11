@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 from mcp import Client
+from iacpaas_mcp.confirmation import elicitation_handler
 
 from iacpaas_mcp.agent import run_agent
 from iacpaas_mcp.adaptive_agent import decision_schema, messages_for
@@ -44,7 +45,7 @@ def harness(tmp_path,monkeypatch):
             return httpx.Response(200,json={'message':{'content':text},'prompt_eval_count':10,'eval_count':5})
         monkeypatch.setattr('iacpaas_mcp.adaptive_agent.httpx.AsyncClient',lambda **kw:original(transport=httpx.MockTransport(reply),**kw))
         async def run():
-            async with Client(build_server(backend=backend,allow_write=approve is not None)) as client:
+            async with Client(build_server(backend=backend,allow_write=approve is not None), elicitation_callback=elicitation_handler(approve)) as client:
                 return await run_agent(client,question,'test-model','http://ollama.test',tmp_path/'adaptive.jsonl',
                     approve=approve,on_event=events.append,max_steps=max_steps,llm_config=ModelConfig(provider,'test-model','test-key'),**options)
         return asyncio.run(run()),events,requests,backend
@@ -151,7 +152,7 @@ def test_all_mcp_tools_have_typed_output_and_runtime_diagnostics():
             assert counts['properties']['nodes']['type']=='integer'
             bad=await client.call_tool('count_graph',{'path':'bad'})
             error=json.loads(bad.content[0].text)['error']
-            assert bad.is_error and error['tool']=='count_graph' and error['retryable'] and error['suggestion']
+            assert bad.is_error and error['tool']=='count_graph' and error['code']=='resource_not_found' and error['retryable'] is False and error['suggestion']
     asyncio.run(run())
 
 

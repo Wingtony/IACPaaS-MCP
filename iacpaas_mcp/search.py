@@ -11,7 +11,8 @@ from pathlib import Path
 from .graph import MAX_NODES
 from . import provenance
 
-INDEX = Path(__file__).resolve().parent.parent / "logs" / "search.sqlite3"
+from .paths import LOGS
+INDEX = LOGS / "search.sqlite3"
 LOOKALIKES = str.maketrans("авекмнорстух", "abekmhopctyx")
 
 
@@ -82,20 +83,57 @@ class ResourceSearch:
         with self.connect() as db:
             db.execute("DELETE FROM resource_cache WHERE namespace=?",(self.namespace,))
 
-    async def full_export(self,resource):
-        cached=self.cached(resource)
-        if cached and time.time()-cached["updated"]<self.ttl:
-            source=json.loads(cached["source"])
-            if await asyncio.to_thread(provenance.verify_snapshot,source):
-                def load():
-                    with (provenance.SNAPSHOTS / (source["export_sha256"]+".json")).open(encoding="utf-8") as handle:
-                        graph=json.load(handle)
-                    graph["_source"]=source
-                    return graph
-                return await asyncio.to_thread(load)
-        graph = await self.backend.export(resource)
-        await asyncio.to_thread(self.index_graph, resource, graph)
+    def load_cached(self, cached, served_from="cache", error=""):
+        source=json.loads(cached["source"])
+        if not provenance.verify_snapshot(source): raise ValueError("Контрольная сумма снимка не совпала")
+        graph=json.loads((provenance.SNAPSHOTS/(source["export_sha256"]+".json")).read_text(encoding="utf-8"))
+        graph["_source"]={**source,"served_from":served_from,"stale":served_from=="stale_cache"}
+        if error: graph["_source"]["fallback_reason"]=error
         return graph
+
+    async def full_export(self,resource,refresh=False):
+        cached=self.cached(resource)
+        usable=bool(cached and await asyncio.to_thread(provenance.verify_snapshot,json.loads(cached["source"])))
+        if usable and not refresh and time.time()-cached["updated"]<self.ttl:
+            return await asyncio.to_thread(self.load_cached,cached)
+        try:
+            if usable and not refresh:
+                root=await self.backend.export(resource,depth=0)
+                previous=await asyncio.to_thread(self.load_cached,cached)
+                if root.get("date") is not None and str(root["date"])==str(previous.get("date")):
+                    with self.connect() as db:
+                        db.execute("UPDATE resource_cache SET updated=? WHERE namespace=? AND resource=?",(time.time(),self.namespace,resource))
+                    previous["_source"]["checked_at"]=root["_source"]["retrieved_at"]
+                    return previous
+            graph = await self.backend.export(resource)
+            await asyncio.to_thread(self.index_graph, resource, graph)
+            graph["_source"]["served_from"]="platform"
+            graph["_source"]["stale"]=False
+            return graph
+        except ValueError as error:
+            if usable and getattr(error,"code","")=="platform_unavailable":
+                return await asyncio.to_thread(self.load_cached,cached,"stale_cache","Платформа недоступна; дата снимка указана в источнике")
+            raise
+
+    def status(self,resources):
+        return [{"path":path,"indexed":bool(row),"nodes":row["nodes"] if row else 0,
+                 "age_seconds":round(time.time()-row["updated"],1) if row else None,
+                 "source":json.loads(row["source"]) if row else None}
+                for path in resources for row in [self.cached(path)]]
+
+    async def sync(self,resources,force=False):
+        records=[]
+        async with self.lock:
+            for path in resources:
+                try:
+                    if not force:
+                        with self.connect() as db:
+                            db.execute("UPDATE resource_cache SET updated=0 WHERE namespace=? AND resource=?",(self.namespace,path))
+                    graph=await self.full_export(path,refresh=force)
+                    records.append({"path":path,"status":"stale" if graph["_source"].get("stale") else "ready","source":graph["_source"]})
+                except (ValueError,OSError) as exc:
+                    records.append({"path":path,"status":"failed","error":str(exc)[:200]})
+        return {"resources":records,"complete":all(r["status"]=="ready" for r in records)}
 
     def index_graph(self,resource,graph):
         source=graph.get("_source")
@@ -138,17 +176,13 @@ class ResourceSearch:
         sources=[]
         async with self.lock:
             for path in resources:
-                cached=self.cached(path)
-                cache_hit=bool(cached and not refresh and time.time()-cached["updated"]<self.ttl)
-                if cache_hit:
-                    cache_hit=await asyncio.to_thread(provenance.verify_snapshot,json.loads(cached["source"]))
                 try:
-                    if cache_hit:
-                        source,count=json.loads(cached["source"]),cached["nodes"]
-                    else:
-                        graph=await self.backend.export(path)
-                        source,count=await asyncio.to_thread(self.index_graph,path,graph)
-                        del graph
+                    graph=await self.full_export(path,refresh=refresh)
+                    source=graph["_source"]
+                    cached=self.cached(path)
+                    count=cached["nodes"]
+                    cache_hit=source.get("served_from")!="platform"
+                    del graph
                     sources.append(source)
                     coverage.append({"path":path,"status":"searched","nodes":count,"cached":cache_hit})
                 except (ValueError,TypeError,KeyError,OSError,RecursionError) as exc:
