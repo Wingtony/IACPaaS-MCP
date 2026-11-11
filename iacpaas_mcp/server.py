@@ -334,7 +334,11 @@ def build_server(backend=None, known_paths=None, allow_write=None, write_roots=N
 
 def main():
     sys.stderr.reconfigure(encoding="utf-8")
-    load_dotenv(ENV_FILE)
+    if os.getenv('ATLAS_DOCKER','false').lower()=='true':
+        from .paths import load_environment
+        load_environment(override=True)
+    else:
+        load_dotenv(ENV_FILE)
     parser = argparse.ArgumentParser()
     parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
     parser.add_argument("--port", type=int, default=8765)

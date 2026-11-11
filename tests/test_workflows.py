@@ -2,10 +2,13 @@
 import asyncio
 import copy
 import json
+import os
+import sys
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
-from mcp import Client
+from mcp import Client, StdioServerParameters
 
 from iacpaas_mcp import provenance, search, verifier
 from iacpaas_mcp.backend import MockBackend, PlatformError
@@ -159,6 +162,36 @@ def test_noninteractive_clients_cannot_write():
             result=await client.call_tool("create_folder",{"parent_path":"","name":OWN})
             assert result.is_error
     asyncio.run(run());assert not backend.folders
+
+
+@pytest.mark.parametrize('accept',[True,False])
+def test_stdio_write_confirmation_with_container_environment(tmp_path,accept):
+    """Exercise the real subprocess confirmation roundtrip, not only in-process MCP."""
+    env={**os.environ,'ATLAS_DOCKER':'true','IACPAAS_BACKEND':'mock','IACPAAS_ALLOW_WRITE':'true',
+         'IACPAAS_WRITE_ROOTS':json.dumps([OWN]),'IACPAAS_ENV_FILE':str(tmp_path/'runtime.env'),
+         'IACPAAS_LOG_DIR':str(tmp_path/'logs'),'IACPAAS_DATA_DIR':str(tmp_path/'state')}
+    params=StdioServerParameters(command=sys.executable,args=['-m','iacpaas_mcp.server'],cwd=str(Path(__file__).resolve().parents[1]),env=env)
+    approvals=[]
+    def approve(preview):approvals.append(preview);return accept
+    async def run():
+        async with Client(params,elicitation_callback=elicitation_handler(approve)) as client:
+            result=await client.call_tool('create_folder',{'parent_path':'','name':OWN})
+            assert not result.is_error, result
+            assert result.structured_content['status']==('done' if accept else 'cancelled')
+    asyncio.run(run());assert len(approvals)==1
+
+
+def test_container_stdio_loads_persisted_platform_selection(tmp_path):
+    runtime=tmp_path/'runtime.env'
+    runtime.write_text('IACPAAS_BACKEND=http\nIACPAAS_API_KEY=test-only-key\nIACPAAS_KNOWN_IRS=["Свои/Сохранённая база"]\n',encoding='utf-8')
+    env={**os.environ,'ATLAS_DOCKER':'true','IACPAAS_BACKEND':'mock','IACPAAS_ENV_FILE':str(runtime),'IACPAAS_LOG_DIR':str(tmp_path/'logs')}
+    params=StdioServerParameters(command=sys.executable,args=['-m','iacpaas_mcp.server'],cwd=str(Path(__file__).resolve().parents[1]),env=env)
+    async def run():
+        async with Client(params) as client:
+            result=await client.call_tool('list_inforesources',{})
+            assert not result.is_error and result.structured_content['paths']==['Свои/Сохранённая база']
+            assert result.structured_content['source']=='configuration'
+    asyncio.run(run())  # Only the configured list is read; no HTTP request is sent.
 
 
 def test_index_checks_dates_and_marks_offline_fallback(tmp_path):
