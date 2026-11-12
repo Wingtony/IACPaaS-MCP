@@ -51,6 +51,9 @@ def prepare_sources(steps):
                 interpretations[identity] = data.get("plan", {})
                 allowed = {"rows", "total", "examined", "unknown", "without_element", "offset", "limit", "has_more", "next_offset", "complete"}
                 facts = {k: v for k, v in data.items() if k in allowed}
+                if data.get('plan',{}).get('operation')=='overview':
+                    facts['attribute_total']=data.get('attribute_total',0)
+                    facts['related']={group:{k:details[k] for k in ('total','has_more')} for group,details in data.get('related',{}).items()}
             else:
                 valid = verify_derivation({"tool": tool, "arguments": args, "data": data})
                 def strip(value):

@@ -16,8 +16,10 @@ from .conditions import CompositionCondition, satisfies
 
 class KnowledgePlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    operation: Literal["catalog", "resources", "structure", "materials", "composition", "element", "property", "term", "rank", "filter", "compare", "clarify"]
+    operation: Literal["catalog", "resources", "structure", "materials", "composition", "element", "overview", "property", "term", "rank", "filter", "compare", "clarify"]
     subject: str = Field(default="", max_length=150, description="Точная марка, элемент, свойство или термин. Для compare марки через ;")
+    entity_meta: Literal['','Химический элемент','Химическое вещество','Материал','Класс материалов','Класс свойств','Свойство','Термин'] = Field(default='',description='Для overview: тип объекта, если название/обозначение неоднозначно')
+    overview_sections: list[Literal['attributes','substances','materials','other']] = Field(default_factory=lambda:['attributes','substances','materials','other'],min_length=1,max_length=4,description='Для overview: какие разделы нужны пользователю; отдельный вопрос о веществах не требует повторять весь список материалов')
     class_name: str = Field(default="", max_length=150, description="Класс материалов, например Бронзы; пусто — все классы")
     element: str = Field(default="", max_length=40, description="Символ элемента для rank/filter, например Cr")
     elements: list[str] = Field(default_factory=list,max_length=10,description="Для materials: все элементы, которые должны одновременно быть указаны в составе")
@@ -206,6 +208,7 @@ def verification_status(data):
         return "incomplete_result"
     if data.get("status")!="ok":
         return "needs_clarification"
+    if data.get('plan',{}).get('operation')=='overview' and data.get('entity'):return 'verified_result'
     return "verified_result" if data.get("rows") else "empty_result"
 
 
@@ -236,6 +239,10 @@ def query_graphs(plan, graphs, configured_paths):
     if plan.dataset and plan.dataset != dataset:
         result["status"] = "clarify"
         return finish("Содержимое базы изменилось между страницами. Начните поиск заново, чтобы не пропустить и не повторить материалы.")
+    if op == 'overview':
+        from .overview import evaluate
+        result.update(evaluate(plan,graphs,configured_paths))
+        return finish(result['answer'])
     if op == "clarify":
         result["status"] = "clarify"
         questions={"bound":"В базе содержание задано диапазонами и ограничениями. Рейтинг нужен по верхней или по нижней границе содержания? Это разные результаты.",
@@ -422,6 +429,8 @@ def resource_needed(path, operation):
         return any(path.endswith("/"+name) for name in ("Справочник по материалам","База химических элементов и веществ","База свойств материалов"))
     if title.startswith("Онтология"):
         return False
+    if operation=='overview':
+        return True
     return {"composition":"Справочник по материалам", "compare":"Справочник по материалам", "materials":"Справочник по материалам", "rank":"Справочник по материалам", "filter":"Справочник по материалам", "element":"База химических элементов и веществ", "property":"База свойств материалов", "term":"Терминологический справочник"}.get(operation)==title
 
 
@@ -490,4 +499,6 @@ def verify_result(data, paths):
         expected["status"]="unavailable"
         expected["answer"]="Нужная информационная база недоступна в выбранной области. Выберите «Все подключённые базы» или проверьте подключение."
     apply_source_notices(expected, sources)
-    return all(data.get(key)==value for key,value in expected.items())
+    # New optional plan fields must not invalidate historical proofs with identical defaults.
+    actual_plan=KnowledgePlan.model_validate(data['plan']).model_dump()
+    return all((actual_plan if key=='plan' else data.get(key))==value for key,value in expected.items())

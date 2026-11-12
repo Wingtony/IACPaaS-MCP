@@ -208,7 +208,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         window,input_budget,output_limit=context_settings()
         return JSONResponse({"context_length":window,"context_budget":input_budget,"output_limit":output_limit,"csrf": csrf, "model": selected.model, "provider":selected.provider, "cloud":selected.cloud, "online": online, "model_available": model_available,
                              "backend": os.getenv("IACPAAS_BACKEND", "mock"), "tools": len(tools),
-                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true', "review_version":3})
+                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true', "review_version":3, "dialogue_version":1})
 
     async def model_settings(request):
         if request.method == "GET":

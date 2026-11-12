@@ -63,6 +63,70 @@ def test_dependent_calls_are_selected_after_actual_results(harness,provider):
     assert report['status']=='verified_result' and not report['meaning_verified']
 
 
+def overview_backend():
+    backend=MockBackend()
+    backend.resources={'Загрузки/База химических элементов и веществ':{'type':'КОРЕНЬ','successors':[
+        {'name':'Железо','meta':'Химический элемент','successors':[{'meta':'обозначение','value':'Fe'},{'meta':'порядковый номер','value':26}]},
+        {'name':'Оксид','meta':'Химическое вещество','successors':[{'meta':'обозначение','value':'Fe₂O₃'}]}]}}
+    return backend
+
+
+def test_capabilities_are_answered_from_actual_tools_without_model(harness):
+    answer,events,requests,_=harness([],question='Что ты можешь сделать?')
+    assert not requests and 'Могу исследовать' in answer and 'ресурсов: **1**' in answer
+    assert next(e for e in events if e['event']=='verification')['status']=='capabilities'
+
+
+def test_broad_question_cannot_be_reduced_to_two_element_fields(harness):
+    answer,events,_,_=harness([call('query_knowledge',plan={'operation':'element','subject':'Fe'}),finish('S1')],
+        backend=overview_backend(),question='О Fe выведи все сведения и связанных веществах')
+    assert 'Связанные вещества' in answer and 'Оксид' in answer
+    report=next(e for e in events if e['event']=='verification')
+    assert report['complete'] and report['data_verified'] and not report['request_coverage']['missing']
+    assert report['query_plan']['operation']=='overview'
+
+
+def test_premature_finish_replans_instead_of_claiming_all_parts_done(harness):
+    path='Загрузки/База химических элементов и веществ'
+    answer,events,_,_=harness([call('count_graph',path=path),finish('S1'),
+        call('query_knowledge',plan={'operation':'overview','subject':'Fe'}),finish('S2')],backend=overview_backend(),
+        question='Выведи все сведения об Fe и связанные вещества')
+    assert 'Оксид' in answer
+    assert any(e['event']=='replanning' and 'Не выполнены части' in e['message'] for e in events)
+
+
+def test_budget_exhaustion_keeps_verified_values_but_marks_missing_parts(harness):
+    path='Загрузки/База химических элементов и веществ'
+    answer,events,_,_=harness([call('count_graph',path=path)],backend=overview_backend(),max_steps=1,
+        question='Все сведения об Fe и связанные вещества')
+    report=next(e for e in events if e['event']=='verification')
+    assert report['status']=='incomplete' and report['data_verified'] and not report['complete']
+    assert 'Не выполнены части вопроса' in answer
+
+
+def test_compound_structure_and_count_need_both_tools(harness):
+    answer,events,_,_=harness([call('count_graph',path=PATH),finish('S1'),call('get_subgraph',path=PATH,root='',depth=1),finish('S1','S2')],
+        question='Покажи структуру графа и посчитай количество вершин')
+    report=next(e for e in events if e['event']=='verification')
+    assert report['complete'] and len(report['request_coverage']['parts'])==2
+
+
+def test_known_object_followup_refreshes_data_without_model_reusing_old_text(harness):
+    answer,events,requests,_=harness([],backend=overview_backend(),question='А какие связанные вещества нашлись?',
+        history=[{'role':'assistant','content':'Старая карточка Fe','query_plan':{'operation':'element','subject':'Fe'}}])
+    assert not requests and 'Оксид' in answer and 'Карточка объекта' not in answer
+    assert 'Связанные материалы' not in answer
+    report=next(e for e in events if e['event']=='verification')
+    assert report['complete'] and report['data_verified']
+
+
+def test_model_cannot_request_generic_clarification_before_searching_explicit_element(harness):
+    clarify={'action':'clarify','call':None,'evidence_ids':[],'question':'Что именно вас интересует?','sufficient':False,'assessment':'Нужно уточнение'}
+    answer,events,_,_=harness([clarify,call('query_knowledge',plan={'operation':'element','subject':'Fe'}),finish('S1')],
+        backend=overview_backend(),question='Расскажи о Fe')
+    assert 'Оксид' in answer and any(e['event']=='replanning' for e in events)
+
+
 def test_api_error_is_given_to_model_before_replanning(harness):
     class Flaky(MockBackend):
         attempts=0
