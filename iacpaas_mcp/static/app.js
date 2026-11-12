@@ -125,7 +125,7 @@ function renderMessages() {
         const review=document.createElement('button'); review.className='copy-button'; review.textContent='Проверить смысл · LLM';
         review.title='Повторная сверка источников и выборочная проверка до 8 утверждений моделью, до 120 секунд. Облачный запрос оплачивается провайдеру.';
         review.onclick=async()=>{
-          if(config.review_version!==2){toast('Перезапустите Web-приложение и обновите страницу: сервер использует старую проверку.');return;}
+          if(config.review_version!==3){toast('Перезапустите Web-приложение и обновите страницу: сервер использует старую проверку.');return;}
           const chatId=current.id,started=Date.now();review.disabled=true;
           const tick=()=>{review.textContent=`Проверка: ${Math.floor((Date.now()-started)/1000)} с / 120 с`;};tick();
           const timer=setInterval(tick,1000),cancel=document.createElement('button');cancel.className='copy-button';cancel.textContent='Отменить проверку';footer.append(cancel);
@@ -140,9 +140,9 @@ function renderMessages() {
       if (message.claim_review) {
         const panel=document.createElement('details'); panel.className='verification';
         const report=message.claim_review;const summary=document.createElement('summary');
-        summary.textContent=report.version===2?`Смысловая проверка: подтверждено ${report.confirmed} из ${report.total}${report.reference_errors?' · ошибок ссылок: '+report.reference_errors:''}`:'Устаревший результат проверки — запустите новую';panel.append(summary);
+        summary.textContent=report.version>=2?`Смысловая проверка: подтверждено ${report.confirmed} из ${report.total}${report.reference_errors?' · ошибок ссылок: '+report.reference_errors:''}`:'Устаревший результат проверки — запустите новую';panel.append(summary);
         const notice=document.createElement('p');notice.textContent=report.notice;panel.append(notice);
-        if(report.version===2){
+        if(report.version>=2){
           const labels={confirmed:'Поддерживается источником',not_in_data:'Недостаточно данных',contradicted:'Противоречит источнику',reference_error:'Ошибка ссылки проверяющего'};
           const proof=document.createElement('p');proof.className='review-replay';proof.textContent=`Повторная сверка MCP: ${report.replay?.length||0} результатов · ${report.seconds} с`;panel.append(proof);
           for(const claim of report.claims){const row=document.createElement('div');row.className='review-claim';const label=document.createElement('strong');label.textContent=labels[claim.status]||claim.status;

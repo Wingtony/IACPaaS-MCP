@@ -227,16 +227,17 @@ def count_step():
 @pytest.mark.parametrize("pointer,expected", [("/nodes","confirmed"),("/missing","reference_error"),("/answer","reference_error")])
 def test_claim_verifier_downgrades_invented_source_bindings(monkeypatch,pointer,expected):
     async def complete(*args):
-        return {"message":{"content":json.dumps({"claims":[{"quote":"8 вершин", "status":"confirmed", "source_id":"T0", "pointer":pointer}]})}}
+        return {"message":{"content":json.dumps({"claims":[{"segment_id":"A1", "status":"confirmed", "fact_id":"T0"+pointer}]})}}
     monkeypatch.setattr(verifier,"complete",complete)
     report=asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[count_step()],ModelConfig("deepseek","test","fake")))
     assert report["claims"][0]["status"]==expected
     assert report["claims"][0]["binding_verified"] is (expected=="confirmed")
 
 
-def test_claim_verifier_rejects_fabricated_answer_quote(monkeypatch):
+def test_claim_verifier_reports_unknown_fragment_without_crashing(monkeypatch):
     async def complete(*args):
-        return {"message":{"content":json.dumps({"claims":[{"quote":"9 вершин", "status":"not_in_data"}]})}}
+        return {"message":{"content":json.dumps({"claims":[{"segment_id":"A999", "status":"not_in_data"}]})}}
     monkeypatch.setattr(verifier,"complete",complete)
-    with pytest.raises(ValueError,match="цитату"):
-        asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[count_step()],ModelConfig("deepseek","test","fake")))
+    report=asyncio.run(verifier.verify_answer("Сколько?","8 вершин",[count_step()],ModelConfig("deepseek","test","fake")))
+    assert report['confirmed']==0 and report['reference_errors']==1
+    assert report['claims'][0]['status']=='reference_error'

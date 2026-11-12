@@ -208,7 +208,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
         window,input_budget,output_limit=context_settings()
         return JSONResponse({"context_length":window,"context_budget":input_budget,"output_limit":output_limit,"csrf": csrf, "model": selected.model, "provider":selected.provider, "cloud":selected.cloud, "online": online, "model_available": model_available,
                              "backend": os.getenv("IACPAAS_BACKEND", "mock"), "tools": len(tools),
-                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true', "review_version":2})
+                             "write_enabled": os.getenv("IACPAAS_ALLOW_WRITE", "false").lower() == "true", "docker":os.getenv('ATLAS_DOCKER','false').lower()=='true', "review_version":3})
 
     async def model_settings(request):
         if request.method == "GET":
@@ -439,7 +439,9 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
             return JSONResponse(report)
         except httpx.TimeoutException:
             return JSONResponse({'error':'Модель не ответила за отведённое время. Неполный вердикт не сохранён.'},status_code=408)
-        except (ValueError,ValidationError,httpx.HTTPError) as exc:
+        except ValidationError:
+            return JSONResponse({'error':'Проверяющий вернул некорректный формат. Результат не сохранён; попробуйте другую модель.'},status_code=400)
+        except (ValueError,httpx.HTTPError) as exc:
             return JSONResponse({"error":str(exc) if isinstance(exc,ValueError) else "Проверка модели не завершена"},status_code=400)
 
     async def index_control(request):
