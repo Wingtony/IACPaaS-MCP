@@ -24,6 +24,8 @@ from .policy import WritePolicy
 from .write_scope import WriteScope, canonical, key
 from .ontology import TreeItem, build_resource, data_tree
 from .backend import PlatformError
+from .navigation import children_page
+from .results import ChildrenPage
 from .search import ResourceSearch
 from .knowledge import KnowledgePlan, execute_plan
 from .results import IndexStatus, SyncResult, ResourceList, Graph, Subgraph, Counts, QueryResult, SearchResult, KnowledgeResult, ValidationResult, WriteResult, ErrorResult
@@ -111,8 +113,19 @@ def build_server(backend=None, known_paths=None, allow_write=None, write_roots=N
         graph = await backend.export(path,depth=depth) if not root else await search_index.full_export(path)
         result = clip(select(graph, root), depth)
         if counts(result)["nodes"] > 100:
-            raise ValueError("Подграф больше 100 вершин; уменьшите depth")
+            raise PlatformError('Подграф больше 100 вершин','subgraph_too_large',False,'Используйте get_children: раскрывайте ветви постранично; depth ограничивает уровни, а не количество вершин')
         return {"graph": result, "depth": depth, "_source": graph.get("_source", {})}
+
+    @mcp.tool(annotations=READ, structured_output=True)
+    @checked
+    async def get_children(path: PathArg, root: str = '', offset: Annotated[int,Field(ge=0)] = 0,
+                           limit: Annotated[int,Field(ge=1,le=20)] = 20,
+                           expected_snapshot: Annotated[str,Field(pattern='^([a-f0-9]{64})?$')] = '') -> ChildrenPage:
+        """Непосредственные дети вершины, постранично, без выгрузки всех потомков. Для больших деревьев вместо увеличения depth. root — точный путь из поиска/предыдущей страницы; пусто для корня ИР."""
+        graph=await search_index.full_export(path)
+        if expected_snapshot and graph['_source']['export_sha256']!=expected_snapshot:
+            raise PlatformError('Граф изменился между страницами','snapshot_changed',False,'Сверните и откройте дерево заново')
+        return {**children_page(graph,root,offset,limit),'_source':graph['_source']}
 
     @mcp.tool(annotations=READ, structured_output=True)
     @checked

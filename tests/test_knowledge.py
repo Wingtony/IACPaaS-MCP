@@ -37,6 +37,22 @@ def graphs():
             CHEMISTRY:{"name":"База химических элементов и веществ","successors":[{"name":"Железо","meta":"Химический элемент","successors":[{"meta":"обозначение","value":"Fe"},{"meta":"порядковый номер","value":26}]}]}}
 
 
+def test_structure_targets_requested_branch_and_pages_its_children():
+    plan={'operation':'structure','subject':'Справочник по материалам/Бронзы','limit':2}
+    result=query_graphs(plan,graphs(),list(graphs()))
+    assert result['total']==3 and [row[1] for row in result['rows']]==['A','B']
+    assert result['has_more'] and result['next_offset']==2
+    next_page=query_graphs({**plan,'offset':2},graphs(),list(graphs()))
+    assert [row[1] for row in next_page['rows']]==['C'] and not next_page['has_more']
+    explicit=query_graphs({'operation':'structure','subject':'Справочник по материалам','structure_root':'Бронзы','limit':2},graphs(),list(graphs()))
+    assert explicit['rows']==result['rows']
+
+
+def test_missing_structure_branch_does_not_return_resource_top_level():
+    result=query_graphs({'operation':'structure','subject':'Справочник по материалам/Несуществующая ветка'},graphs(),list(graphs()))
+    assert result['status']=='not_found' and not result['rows']
+
+
 def test_composition_preserves_ranges_and_source_identity():
     result=query_graphs({"operation":"composition","subject":"B"},graphs(),list(graphs()))
     assert result["rows"]==[["B","Cr","5 — 8","%"]]

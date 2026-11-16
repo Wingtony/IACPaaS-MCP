@@ -7,7 +7,7 @@ from .provenance import verify_snapshot
 from . import provenance
 from .graph import counts, select, clip, walk
 
-READ_TOOLS = {"list_inforesources", "get_inforesource", "get_subgraph", "count_graph", "query_graph", "search_resources", "validate_resource"}
+READ_TOOLS = {"list_inforesources", "get_inforesource", "get_subgraph", "get_children", "count_graph", "query_graph", "search_resources", "validate_resource"}
 LABELS = {"nodes":"Вершины", "edges":"Дуги", "links":"Ссылки", "total":"Всего совпадений", "path":"Путь",
           "name":"Имя", "value":"Значение", "meta":"Метапонятие", "type":"Тип", "title":"Название",
           "paths":"Доступные ресурсы", "truncated":"Список сокращён", "depth":"Глубина", "resource":"База",
@@ -96,6 +96,11 @@ def verify_derivation(record):
     if not verify_snapshot(source) or source.get("path") != args.get("path"):
         return False
     raw = json.loads((provenance.SNAPSHOTS / (source["export_sha256"] + ".json")).read_text(encoding="utf-8"))
+    if record['tool']=='get_children':
+        from .navigation import children_page
+        if args.get('expected_snapshot') and args['expected_snapshot']!=source['export_sha256']:return False
+        expected=children_page(raw,args.get('root',''),args.get('offset',0),args.get('limit',20))
+        return all(data.get(k)==v for k,v in expected.items())
     if record["tool"] == "count_graph":
         calculated = counts(select(raw, args.get("root", "")))
         return all(type(data.get(key)) is int and data[key] == value for key, value in calculated.items())

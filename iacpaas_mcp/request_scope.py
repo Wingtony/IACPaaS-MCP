@@ -7,6 +7,27 @@ def capabilities_request(question):
     return bool(re.fullmatch(r'(?:привет|здравствуй(?:те)?|что\s+(?:ты|вы)\s+(?:вообще\s+)?(?:можешь|можете|умеешь|умеете)(?:\s+(?:сделать|делать))?|(?:какие|покажи)\s+(?:у\s+тебя\s+)?возможности|чем\s+(?:ты\s+)?(?:можешь\s+)?(?:мне\s+)?помочь|как\s+(?:тобой|вами)\s+пользоваться|помощь|help)',text))
 
 
+def ranking_constraints(question):
+    """Describe capabilities, not engineering recommendations or inferred property values."""
+    text=question.casefold().replace('ё','е')
+    ranking=bool(re.search(r'\bтоп\b|рейтинг|лучш|оптимальн|наиболее|наименее|\bсам(?:ый|ые|ая|ое|ых)\b',text))
+    if not ranking:return None,[]
+    mechanical=bool(re.search(r'прочн|предел\w*\s+текуч|сопротивлен\w*\s+разрыв',text))
+    purpose=re.search(r'для\s+(\w+)',text)
+    application=bool(re.search(r'ракет|авиац|космич|назначени|пригодн',text) or (purpose and purpose[1] not in {'меня','нас','вас','сравнения','анализа','примера','просмотра'}))
+    from .knowledge import mentioned_elements
+    composition=bool(mentioned_elements(question) and re.search(r'содержан|концентрац|массов\w*\s+дол|больш\w*\s+(?:углерод|хром|никел)',text))
+    if (mechanical or application) and not composition:
+        return ('Для обоснованного рейтинга нужен измеряемый критерий и условия сравнения. '
+                'Текущий модуль рассчитывает рейтинги по элементному составу, а не прочности или пригодности для отрасли. '
+                'Содержание C нельзя выдавать за измеренную прочность. Укажите показатель, его значения/источник и условия '
+                'либо попросите явно отсортировать материалы по содержанию элемента.'),[]
+    limitations=[]
+    if composition and mechanical:limitations.append('Это рейтинг по записанному содержанию элемента, а не по измеренной прочности. Прочность этим расчётом не определялась.')
+    if composition and application:limitations.append('Пригодность для указанного назначения этим отбором по составу не подтверждена; инженерные критерии применения не оценивались.')
+    return None,limitations
+
+
 def wants_overview(question):
     text=question.casefold().replace('ё','е')
     explicit_relations=bool(re.search(r'связан|связ[ьи]|связей|связях',text))
@@ -63,7 +84,7 @@ def request_coverage(question, records):
             if operation in {'composition','compare'}:answered.add('composition')
             if operation=='property':answered.add('properties')
             if operation=='structure':answered.add('structure')
-        if tool=='get_subgraph':answered.add('structure')
+        if tool in {'get_subgraph','get_children'}:answered.add('structure')
         if tool=='count_graph':answered.add('graph_count')
     parts=[{'id':key,'label':label,'status':details.get(key,'answered' if key in answered else 'missing')} for key,label in required]
     return {'parts':parts,'missing':[p['label'] for p in parts if p['status'] not in {'answered','no_matches'}],

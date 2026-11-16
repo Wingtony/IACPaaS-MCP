@@ -105,7 +105,7 @@ def test_mcp_read_and_errors():
     async def run():
         async with Client(build_server(backend=MockBackend(), allow_write=False)) as client:
             tools = (await client.list_tools()).tools
-            assert len(tools) == 16
+            assert len(tools) == 17
             assert all(tool.description and tool.input_schema for tool in tools)
             result = await client.call_tool("count_graph", {"path": PATH})
             assert not result.is_error
@@ -186,7 +186,7 @@ def test_stdio_real_subprocess():
         params = StdioServerParameters(command=sys.executable, args=["-m", "iacpaas_mcp.server"],
                                        cwd=str(Path(__file__).resolve().parent.parent), env=env)
         async with Client(params) as client:
-            assert len((await client.list_tools()).tools) == 16
+            assert len((await client.list_tools()).tools) == 17
             assert (await client.call_tool("count_graph", {"path": PATH})).structured_content["edges"] == 8
     asyncio.run(run())
 

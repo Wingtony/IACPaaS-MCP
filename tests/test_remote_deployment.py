@@ -46,6 +46,13 @@ def test_remote_ui_requires_password_and_keeps_host_origin_csrf_guards(remote_cl
     assert client.post('/api/app/stop',json={},headers={'x-csrf-token':csrf}).status_code==409
 
 
+def test_allowed_hosts_are_site_addresses_not_client_ip_acl(remote_client):
+    with TestClient(remote_client.app,base_url='http://atlas.lan',client=('10.0.0.5',60000)) as visitor:
+        assert visitor.get('/').status_code==401
+        assert visitor.get('/',auth=('atlas',PASSWORD)).status_code==200
+        assert visitor.get('/',auth=('atlas',PASSWORD),headers={'Host':'10.0.0.5'}).status_code==403
+
+
 def test_external_ollama_url_is_saved_and_probed_from_server(remote_client,monkeypatch):
     client=remote_client;client.auth=('atlas',PASSWORD)
     csrf=client.get('/api/status').json()['csrf'];headers={'x-csrf-token':csrf}

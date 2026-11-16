@@ -47,6 +47,25 @@ class Subgraph(TypedDict):
     _source: Source
 
 
+class Child(TypedDict):
+    graph: Graph
+    path: str
+    has_children: bool
+    is_link: bool
+
+
+class ChildrenPage(TypedDict):
+    parent: Graph
+    root: str
+    children: list[Child]
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
+    next_offset: int | None
+    _source: Source
+
+
 class Match(TypedDict, total=False):
     __pydantic_config__ = ConfigDict(extra='allow')
     path: str

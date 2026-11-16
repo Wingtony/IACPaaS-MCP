@@ -8,12 +8,13 @@ import time
 import httpx
 from jsonschema import Draft202012Validator
 
-from .context import compact_schema, context_settings, estimate_tokens
-from .evidence import EvidenceStore, digest, verify_derivation
+from .context import compact_schema, context_settings, estimate_tokens,execution_limits
+from .evidence import EvidenceStore, digest, verify_derivation,READ_TOOLS
+from .progress import signature,fallback_ids
 from .knowledge import KnowledgePlan, verify_result, verification_status,mentioned_elements
 from .llm import complete
 from .planner_agent import SYSTEM as DOMAIN_SYSTEM, dialogue_context, guard_plan,contextual_plan
-from .request_scope import capabilities_request,capabilities_answer,request_coverage,wants_overview
+from .request_scope import capabilities_request,capabilities_answer,request_coverage,wants_overview,ranking_constraints
 
 SYSTEM = """Ты агент графовой платформы IACPaaS. Решай вопрос последовательными MCP-вызовами.
 Верни только JSON по схеме решения: action call/finish/clarify; call {tool, arguments} или null;
@@ -23,6 +24,7 @@ sufficient — хватает ли результатов; assessment — кор
 Инструменты и аргументы выбирай по схеме. Результат каждого вызова будет в следующем сообщении.
 Для состава/рейтингов/фильтров используй query_knowledge: сначала operation catalog, затем предметный план.
 Для количества вершин/дуг используй count_graph; для подграфа get_subgraph; для точного пути query_graph/search_resources.
+get_children раскрывает крупные ветви постранично без ошибки размера. depth — число уровней, не лимит вершин. Полученный evidence_id используй для ответа; не повторяй успешные запросы к базе. Рейтинг состава не доказывает прочность/пригодность для отрасли.
 Для поиска имени передавай его в query_graph.arguments.text; limit ограничивает выдачу, но НЕ фильтрует её.
 path — точный путь ИР из list_inforesources, root — отдельный путь вершины из matches[].path.
 Найденный matches[].path нельзя подставлять в arguments.path или склеивать с путём ИР.
@@ -162,6 +164,12 @@ def messages_for(question, history, observations, schema, budget):
 
 def render_record(record):
     data=record['data']
+    if record['tool']=='get_children':
+        rows=['| Вершина | Тип | Есть дочерние |','|---|---|---|']
+        for child in data['children']:
+            node=child['graph'];name=str(node.get('name',node.get('value',node.get('value_preview','Ссылка')))).replace('|','\\|').replace('\n',' ')
+            rows.append('| '+name+' | '+str(node.get('meta',node.get('type',''))).replace('|','\\|')+' | '+('да' if child['has_children'] else 'нет')+' |')
+        return 'Непосредственные дочерние вершины ветки `'+(data['root'] or '(корень ИР)')+'`. Показано '+str(len(data['children']))+' из '+str(data['total'])+'.\n\n'+'\n'.join(rows)+('\n\nЕсть продолжение: offset='+str(data['next_offset']) if data['has_more'] else '')
     if record['tool']=='query_knowledge': return data['answer']
     if record['tool']=='count_graph':
         return f"Ресурс: `{record['arguments']['path']}`.\n\nВершины: **{data['nodes']}**. Дуги: **{data['edges']}**. Ссылки: **{data['links']}**."
@@ -204,17 +212,18 @@ def render_record(record):
     return '```json\n'+json.dumps(public,ensure_ascii=False,indent=2)+'\n```'
 
 
-async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_steps=12,approve=None,
+async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_steps=None,approve=None,
                              history=None,on_event=None,resource_path='',llm_config=None):
     async def emit(event):
         if on_event:
             value=on_event(event)
             if inspect.isawaitable(value): await value
     trace_file.parent.mkdir(parents=True,exist_ok=True)
+    max_steps,stagnant_limit=execution_limits(max_steps)
     def trace(event):
         with trace_file.open('a',encoding='utf-8') as f:
             f.write(json.dumps({'time':time.time(),**event},ensure_ascii=False)+'\n')
-    trace({'event':'runtime','mode':'adaptive','model':model,'provider':llm_config.provider if llm_config else 'ollama'})
+    trace({'event':'runtime','mode':'adaptive','model':model,'provider':llm_config.provider if llm_config else 'ollama','max_steps':max_steps,'max_stagnant':stagnant_limit,'think':False})
     definitions=(await client.list_tools()).tools
     tools={t.name:t for t in definitions}
     listed=await client.call_tool('list_inforesources',{'limit':100})
@@ -232,12 +241,20 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
         await emit({'event':'verification',**report});trace({'event':'verification',**report})
         await emit({'event':'answer','answer':answer,'tokens_in':0,'tokens_out':0});trace({'event':'answer','answer':answer})
         return answer
+    clarification,answer_limitations=ranking_constraints(question)
+    if clarification:
+        report={'status':'needs_clarification','complete':False,'data_verified':False,'meaning_verified':False,
+                'scope':scope,'sources':[],'claims':[],'stop_reason':'criteria_required'}
+        trace({'event':'verification',**report});await emit({'event':'verification',**report})
+        trace({'event':'answer','answer':clarification});await emit({'event':'answer','answer':clarification,'tokens_in':0,'tokens_out':0})
+        return clarification
     store=EvidenceStore(trace_file.parent/(trace_file.stem+'-sources'),scope=scope)
     observations=[]; repeats={}; write_results={}; seen_roots={p:{''} for p in allowed_paths}
+    completed_reads={};progress_seen=set();stagnant=0;last_issue=''
     tokens_in=tokens_out=0
     context,budget,output=context_settings()
 
-    async def finish(ids, sufficient, assessment, exhausted=False):
+    async def finish(ids, sufficient, assessment, exhausted=False,stop_reason=None):
         nonlocal tokens_in,tokens_out
         if not ids or any(i not in store.records and i not in write_results for i in ids):
             raise ValueError('Для ответа выберите полученные evidence_ids; неподтверждённый ответ запрещён')
@@ -267,9 +284,12 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
             raise ValueError('Не выполнены части вопроса: '+', '.join(coverage['missing'])+'. Продолжи поиск; для сведений об объекте и связей используй query_knowledge operation overview. Если сведений получить нельзя, finish sufficient=false и явно покажи пробелы.')
         data_verified=bool(selected) and any(r['data'].get('_source') or r['data'].get('_sources') for r in selected) and all(r['tool'] not in {'index_status','sync_resources','validate_tree','validate_resource'} for r in selected)
         if coverage['missing']:complete_result=False
+        if answer_limitations:complete_result=False
         answer='\n\n'.join(rendered)
+        if answer_limitations:answer='\n\n'.join('**Ограничение:** '+item for item in answer_limitations)+'\n\n'+answer
         if coverage['missing']:answer+='\n\n**Не выполнены части вопроса:** '+ '; '.join(coverage['missing'])+'.'
-        if exhausted or not sufficient: answer='**Поиск неполный: достигнут лимит шагов или данные недостаточны.**\n\n'+answer
+        if stop_reason=='no_progress':answer='**Остановлены повторы без новых данных. Ниже сохранены проверенные результаты; полнота ответа не подтверждена.**\n\n'+answer
+        elif exhausted or not sufficient: answer='**Поиск неполный: достигнут лимит шагов или данные недостаточны.**\n\n'+answer
         elif selected and not complete_result: answer='**Полнота ответа не подтверждена.**\n\n'+answer
         last=next((r['data'] for r in reversed(selected) if r['tool']=='query_knowledge'),None)
         report={'status':'verified_result' if complete_result and selected else 'incomplete' if selected else 'not_verified',
@@ -277,6 +297,20 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                 'sources':[{**{k:v for k,v in r.items() if k!='data'},'export':r['data'].get('_source'),'exports':r['data'].get('_sources',[])} for r in selected],
                 'assessment':assessment,'notice':'Поля и расчёты сверены с источниками. Достаточность оценена агентом; правильность понимания вопроса не гарантируется.'}
         if last: report.update(query_plan={**last['plan'], 'dataset':last.get('dataset','')},rows=len(last['rows']),selection=[str(row[0]) for row in last['rows'] if row])
+        if stop_reason:
+            report['stop_reason']=stop_reason
+            report['stop_detail']=assessment
+            answer+='\n\n**Причина остановки:** '+assessment
+        if answer_limitations:report['limitations']=answer_limitations
+        trace({'event':'verification',**report});await emit({'event':'verification',**report})
+        trace({'event':'answer','answer':answer});await emit({'event':'answer','answer':answer,'tokens_in':tokens_in,'tokens_out':tokens_out})
+        return answer
+
+    async def stop(reason,message):
+        ids=fallback_ids(store.records) or list(write_results)[-6:]
+        if ids:return await finish(ids,False,message,exhausted=True,stop_reason=reason)
+        report={'status':'needs_clarification','meaning_verified':False,'complete':False,'scope':scope,'sources':[],'claims':[],'stop_reason':reason}
+        answer=message+' Проверенных данных для ответа пока нет. Уточните критерий или проверьте журнал шагов; увеличение лимита не устраняет отсутствие прогресса.'
         trace({'event':'verification',**report});await emit({'event':'verification',**report})
         trace({'event':'answer','answer':answer});await emit({'event':'answer','answer':answer,'tokens_in':tokens_in,'tokens_out':tokens_out})
         return answer
@@ -295,27 +329,41 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
             return await finish([identity],data.get('complete',False) and data.get('status')=='ok','Контекстный запрос выполнен заново по объекту и условиям предыдущего хода.')
         observations.append({'tool':'query_knowledge','arguments':args,'is_error':True,'data':data})
 
-    async with httpx.AsyncClient(timeout=600) as http:
+    model_timeout=int(os.getenv('AGENT_MODEL_TIMEOUT','180'))
+    if not 1<=model_timeout<=600:raise ValueError('AGENT_MODEL_TIMEOUT должен быть от 1 до 600 секунд')
+    async with httpx.AsyncClient(timeout=model_timeout) as http:
         for step in range(max_steps):
             messages,metrics=messages_for(question,history,observations,schema,budget)
             metrics.update(context_length=context,output_limit=output)
             trace({'event':'context',**metrics});await emit({'event':'context',**metrics})
             await emit({'event':'thinking','step':step})
             if llm_config and llm_config.cloud:
-                payload=await complete(llm_config,messages,schema,output)
+                try:payload=await complete(llm_config,messages,schema,output)
+                except httpx.TimeoutException:return await stop('model_timeout','Модель не ответила за отведённое время.')
+                except (httpx.HTTPError,ValueError):return await stop('model_error','Ошибка подключения или формата ответа модели.')
             else:
                 keep=os.getenv('AGENT_KEEP_ALIVE','-1')
                 options={'num_ctx':context,'num_predict':output,'temperature':0}
                 if os.getenv('AGENT_GPU_LAYERS'):options['num_gpu']=int(os.environ['AGENT_GPU_LAYERS'])
                 body={'model':model,'messages':messages,'format':schema,'stream':False,'think':False,
                       'keep_alive':int(keep) if keep.lstrip('-').isdigit() else keep,'options':options}
-                response=await http.post(ollama_url.rstrip('/')+'/api/chat',json=body)
-                response.raise_for_status();payload=response.json()
+                try:
+                    response=await http.post(ollama_url.rstrip('/')+'/api/chat',json=body)
+                    response.raise_for_status();payload=response.json()
+                except httpx.TimeoutException:return await stop('model_timeout','Модель не ответила за отведённое время.')
+                except (httpx.HTTPError,ValueError):return await stop('model_error','Ошибка подключения или формата ответа модели.')
+            if not isinstance(payload,dict):return await stop('model_error','API модели вернул неподдерживаемый формат.')
             tokens_in+=payload.get('prompt_eval_count',0);tokens_out+=payload.get('eval_count',0)
-            if payload.get('done_reason')=='length':raise RuntimeError('Модель исчерпала лимит ответа; уменьшите объём задачи')
+            if payload.get('done_reason')=='length':return await stop('model_output_limit','Модель исчерпала лимит вывода до формирования решения.')
             decision = None
             try:
-                decision=json.loads(payload.get('message',{}).get('content',''))
+                message=payload.get('message') or {}
+                if not isinstance(message,dict):raise ValueError('API модели не вернул объект message с JSON-решением')
+                content=message.get('content') or ''
+                if not isinstance(content,str):raise ValueError('Содержимое решения модели должно быть JSON-строкой')
+                if not content.strip() and message.get('thinking'):
+                    raise ValueError('Модель вернула только thinking без JSON-решения, хотя think=false. Проверьте поддержку режима и JSON Schema выбранной моделью/Ollama.')
+                decision=json.loads(content)
                 if isinstance(decision, dict):
                     check_resource_path(decision.get('call'), allowed_paths, seen_roots)
                 errors=list(validator.iter_errors(decision))
@@ -348,6 +396,8 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                 root=args.get('root') or (args.get('concept_path','') if name=='update_concept' else '')
                 if root and root not in seen_roots.get(args.get('path'),set()):raise ValueError('Путь вершины не получен из данных. Сначала query_graph/search_resources')
                 key=json.dumps([name,args],sort_keys=True,ensure_ascii=False)
+                if key in completed_reads:
+                    raise ValueError('Этот запрос уже выполнен; источник '+completed_reads[key]+'. Используйте полученный evidence_id для finish либо получите действительно новые данные. Повторно база не вызывается.')
                 repeats[key]=repeats.get(key,0)+1
                 if repeats[key]>2:raise ValueError('Повтор одного вызова: смените план или задайте уточнение')
                 await emit({'event':'tool_start','name':name,'arguments':args,'step':step})
@@ -376,13 +426,24 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                     else:
                         identity=store.add(name,args,data)
                     if identity:data={**data,'evidence_id':identity}
-                    for match in data.get('matches',[]):
+                    for match in [*data.get('matches',[]),*(data.get('children',[]) if name=='get_children' else [])]:
                         path=match.get('resource',args.get('path'))
                         if path in seen_roots:seen_roots[path].add(match['path'])
                 event={'event':'tool','step':step,'name':name,'arguments':args,'result':data,'is_error':bool(failed),'seconds':round(time.monotonic()-started,3)}
                 trace(event);await emit(event)
                 observations.append({'decision':decision,'tool':name,'arguments':args,'is_error':bool(failed),'data':observation(data)})
+                if failed:
+                    stagnant+=1;last_issue='Инструмент вернул ошибку; подробности в шагах работы с базой.'
+                else:
+                    marker=signature(name,args,data)
+                    stagnant=stagnant+1 if marker in progress_seen else 0
+                    last_issue='Повторное чтение не принесло новых данных.' if stagnant else ''
+                    progress_seen.add(marker)
+                    if name in READ_TOOLS|{'query_knowledge','read_evidence','index_status'}:
+                        completed_reads[key]=data.get('evidence_id',args.get('evidence_id',''))
             except (ValueError,KeyError,TypeError,IndexError) as exc:
+                stagnant+=1
+                last_issue=str(exc)[:500]
                 # Never echo model output or schema-validation dumps with user data.
                 error=diagnostic('invalid_decision',str(exc)[:500])
                 trace({'event':'decision_rejected','step':step,**error})
@@ -392,7 +453,6 @@ async def run_adaptive_agent(client,question,model,ollama_url,trace_file,max_ste
                     if isinstance(rejected_args,dict):rejected_args.pop('confirm_token',None)
                 observations.append({'decision':decision if isinstance(decision,dict) else None,'tool':'host','is_error':True,'data':error})
                 await emit({'event':'replanning','step':step,'message':error['error']['message']})
-    useful=[identity for identity,r in store.records.items() if not (r['tool']=='query_knowledge' and r['data']['plan']['operation']=='catalog')]
-    if useful or write_results:
-        return await finish((useful or list(write_results))[-1:],False,'Достигнут лимит шагов',exhausted=True)
-    raise RuntimeError('Достигнут лимит шагов. Проверенных данных нет; уточните запрос.')
+            if stagnant>=stagnant_limit:
+                return await stop('no_progress',f'Остановка после {stagnant} попыток без новых проверенных данных. '+last_issue)
+    return await stop('max_steps','Достигнут лимит шагов.')

@@ -66,7 +66,7 @@ def test_pages_and_local_security(web_client):
     assert client.get("/static/app.js").status_code == 200
     assert len(client.get("/static/questions.json").json()) >= 31
     assert client.get("/api/status").json()["context_length"] == 32768
-    assert client.get("/api/status").json()["tools"] == 16
+    assert client.get("/api/status").json()["tools"] == 17
     assert client.get('/api/status').json()['review_version']==3
     assert client.get('/api/status').json()['dialogue_version']==1
     assert client.get("/api/status", headers={"Host":"evil.example"}).status_code == 403

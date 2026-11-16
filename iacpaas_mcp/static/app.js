@@ -10,7 +10,7 @@ function toast(message) { $('toast').textContent = message; $('toast').hidden = 
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf, ...(options.headers || {})}});
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Ошибка сервера: ${response.status}`);
+  if (!response.ok) {const error=new Error([typeof data.error==='string'?data.error:`Ошибка сервера: ${response.status}`,data.suggestion].filter(Boolean).join(' · '));error.code=data.code;throw error;}
   return data;
 }
 function inline(text) {
@@ -232,14 +232,34 @@ async function loadResources() {
       button.onclick=async()=>{
         const existing=card.querySelector('.resource-tree');if(existing){existing.remove();button.textContent='Посмотреть структуру';return;}
         button.disabled=true;button.textContent='Загрузка…';
-        try { const result=await api('/api/resource?path='+encodeURIComponent(resource.path));const tree=document.createElement('div');tree.className='resource-tree';tree.append(treeNode(result.graph));card.append(tree);button.textContent='Свернуть'; }
+        try { const result=await api('/api/resource/children?path='+encodeURIComponent(resource.path));const tree=document.createElement('div');tree.className='resource-tree';tree.append(navigationNode({graph:result.parent,path:'',has_children:result.total>0},resource.path,result._source.export_sha256,result));card.append(tree);button.textContent='Свернуть'; }
         catch(error){toast(error.message);button.textContent='Повторить';}finally{button.disabled=false;}
       };
       $('resources').append(card);
     }
   }catch(error){$('resources').textContent=error.message;}
 }
-function treeNode(node){const branch=document.createElement(node.successors?.length?'details':'div');branch.className='tree-node';if(branch.tagName==='DETAILS')branch.open=true;const label=document.createElement(branch.tagName==='DETAILS'?'summary':'span');label.textContent=node.name ?? node.value ?? (node.link?'↗ Ссылка':'Вершина');const meta=document.createElement('small');meta.textContent=node.meta||node.type||'';label.append(meta);branch.append(label);for(const child of node.successors||[])branch.append(treeNode(child));return branch;}
+function navigationNode(info,resourcePath,snapshot,initialPage=null){
+ const branch=document.createElement(info.has_children?'details':'div');branch.className='tree-node';
+ const label=document.createElement(info.has_children?'summary':'span'),node=info.graph;
+ const value=node.value??(node.value_preview?node.value_preview+'…':null);
+ label.textContent=(info.is_link?'↗ ':'')+(node.name?(node.name+(value!==null?': '+value:'')):(value??'Вершина'));
+ const meta=document.createElement('small');meta.textContent=node.meta||node.type||'';label.append(meta);branch.append(label);
+ if(!info.has_children)return branch;
+ const content=document.createElement('div');branch.append(content);let loaded=false,busy=false,next=0,more=null;
+ const error=document.createElement('p');error.className='tree-error';error.setAttribute('role','alert');
+ const apply=page=>{more?.remove();for(const child of page.children)content.append(navigationNode(child,resourcePath,page._source.export_sha256));loaded=true;next=page.next_offset;snapshot=page._source.export_sha256;
+  if(page.has_more){more=document.createElement('button');more.className='tree-more';more.textContent=`Показать ещё · ${page.offset+page.children.length} из ${page.total}`;more.onclick=()=>load();content.append(more);}
+ };
+ const load=async()=>{if(busy)return;busy=true;error.remove();if(more)more.disabled=true;
+  try{const query=new URLSearchParams({path:resourcePath,root:info.path,offset:String(next??0),limit:'20',snapshot});apply(await api('/api/resource/children?'+query));}
+  catch(e){error.textContent=e.message;content.append(error);if(!loaded&&!more){more=document.createElement('button');more.className='tree-more';more.textContent='Повторить загрузку';more.onclick=()=>load();content.append(more);}}
+  finally{busy=false;if(more)more.disabled=false;}
+ };
+ branch.addEventListener('toggle',()=>{if(branch.open&&!loaded)load();});
+ if(initialPage){apply(initialPage);branch.open=true;}
+ return branch;
+}
 function closeSidebar(){document.body.classList.remove('mobile-open');}
 function theme(value){document.documentElement.dataset.theme=value;localStorage.setItem('iacpaas-theme',value);$('theme-toggle').innerHTML=icon(value==='dark'?'sun':'moon');}
 async function loadResourceChoices(){const resources=await api('/api/resources');const selector=$('resource-selector');selector.replaceChildren(new Option('Все подключённые базы',''));for(const resource of resources.resources)selector.append(new Option(resource.path,resource.path));const selected=localStorage.getItem('iacpaas-search-scope-v2');if(resources.resources.some(resource=>resource.path===selected))selector.value=selected;}

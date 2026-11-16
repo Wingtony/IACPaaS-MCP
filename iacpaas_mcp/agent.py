@@ -59,9 +59,11 @@ async def unload_model(model, ollama_url):
         pass
 
 
-async def run_agent(client, question, model, ollama_url, trace_file, max_steps=12, approve=None,
+async def run_agent(client, question, model, ollama_url, trace_file, max_steps=None, approve=None,
                     history=None, on_event=None, resource_path="", mode="adaptive", llm_config=None):
     from .llm import get_config
+    from .context import execution_limits
+    max_steps,_=execution_limits(max_steps)
     llm_config = llm_config or get_config(default_model=model)
     model = llm_config.model
     ollama_url = llm_config.endpoint or ollama_url
@@ -271,7 +273,7 @@ def main():
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--mcp-url", default="")
     parser.add_argument('--mode', choices=['adaptive','knowledge','raw'], default='adaptive')
-    parser.add_argument('--max-steps', type=int, choices=range(3,21), default=12)
+    parser.add_argument('--max-steps', type=int, choices=range(1,61), default=None)
     args = parser.parse_args()
     try:
         asyncio.run(main_async(args))

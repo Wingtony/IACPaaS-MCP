@@ -35,6 +35,8 @@ def harness(tmp_path,monkeypatch):
             body=json.loads(request.content);requests.append(body)
             assert len(requests)<=len(decisions),'Unexpected model request'
             decision=decisions[len(requests)-1]
+            if '__timeout__' in decision:raise httpx.ReadTimeout('test timeout',request=request)
+            if '__payload__' in decision:return httpx.Response(200,json=decision['__payload__'])
             text=json.dumps(decision,ensure_ascii=False)
             if provider=='openai':
                 return httpx.Response(200,json={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':text}]}]})
@@ -75,6 +77,47 @@ def test_capabilities_are_answered_from_actual_tools_without_model(harness):
     answer,events,requests,_=harness([],question='Что ты можешь сделать?')
     assert not requests and 'Могу исследовать' in answer and 'ресурсов: **1**' in answer
     assert next(e for e in events if e['event']=='verification')['status']=='capabilities'
+
+
+def test_thirty_steps_do_not_repeat_successful_read_and_keep_verified_result(harness):
+    answer,events,requests,_=harness([call('count_graph',path=PATH)]*30,max_steps=30)
+    assert len(requests)==4
+    assert len([e for e in events if e['event']=='tool'])==1
+    report=next(e for e in events if e['event']=='verification')
+    assert report['stop_reason']=='no_progress' and report['data_verified'] and not report['complete']
+    assert 'Вершины: **8**' in answer and 'Остановлены повторы' in answer
+
+
+def test_thinking_without_decision_stops_with_diagnostic(harness):
+    answer,events,requests,_=harness([{'__payload__':{'message':{'content':'','thinking':'reasoning'}}}]*3,max_steps=30)
+    assert len(requests)==3 and all(r['think'] is False for r in requests)
+    assert 'thinking' in answer and 'think=false' in answer
+    assert not any(e['event']=='tool' for e in events)
+
+
+def test_different_limits_without_new_data_do_not_evade_progress_guard(harness):
+    answer,events,requests,_=harness([call('query_knowledge',plan={'operation':'resources','limit':n}) for n in range(1,5)],max_steps=30,question='Покажи список ресурсов')
+    assert len(requests)==4 and 'Учебные/База наблюдений' in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='no_progress'
+
+
+def test_output_exhaustion_preserves_already_verified_data(harness):
+    answer,events,_,_=harness([call('count_graph',path=PATH),{'__payload__':{'done_reason':'length','message':{'content':''}}}])
+    assert 'Вершины: **8**' in answer and 'лимит вывода' in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='model_output_limit'
+
+
+def test_model_timeout_preserves_already_verified_data(harness):
+    answer,events,_,_=harness([call('count_graph',path=PATH),{'__timeout__':True}])
+    assert 'Вершины: **8**' in answer and 'не ответила' in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='model_timeout'
+
+
+@pytest.mark.parametrize('question',['Топ пять самых прочных сплавов','Топ сплав для ракетостроения по свойствам угодным этой области'])
+def test_unsupported_ranking_requests_criteria_without_arbitrary_alloy(harness,question):
+    answer,events,requests,_=harness([],question=question)
+    assert not requests and 'измеряемый критерий' in answer and 'ВТ20Л' not in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='criteria_required'
 
 
 def test_broad_question_cannot_be_reduced_to_two_element_fields(harness):

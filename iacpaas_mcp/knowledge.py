@@ -18,6 +18,7 @@ class KnowledgePlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["catalog", "resources", "structure", "materials", "composition", "element", "overview", "property", "term", "rank", "filter", "compare", "clarify"]
     subject: str = Field(default="", max_length=150, description="Точная марка, элемент, свойство или термин. Для compare марки через ;")
+    structure_root: str = Field(default='',max_length=500,description='Для structure: точный путь ветки из query_graph/get_children; subject задаёт ресурс, а не ветку')
     entity_meta: Literal['','Химический элемент','Химическое вещество','Материал','Класс материалов','Класс свойств','Свойство','Термин'] = Field(default='',description='Для overview: тип объекта, если название/обозначение неоднозначно')
     overview_sections: list[Literal['attributes','substances','materials','other']] = Field(default_factory=lambda:['attributes','substances','materials','other'],min_length=1,max_length=4,description='Для overview: какие разделы нужны пользователю; отдельный вопрос о веществах не требует повторять весь список материалов')
     class_name: str = Field(default="", max_length=150, description="Класс материалов, например Бронзы; пусто — все классы")
@@ -203,6 +204,23 @@ def resolve_structure_resources(subject, paths):
     return ([] if unresolved else selected), unresolved
 
 
+def structure_target(subject,paths,root=''):
+    matches=[]
+    for path in paths:
+        for prefix in (path,path.rsplit('/',1)[-1]):
+            if subject.casefold().startswith(prefix.casefold()+'/'):
+                matches.append((len(prefix),path,subject[len(prefix)+1:]))
+    if matches:
+        longest=max(m[0] for m in matches);matches=[m for m in matches if m[0]==longest]
+        if len({m[1] for m in matches})!=1:return [],['Уточните ресурс для ветки'],root
+        _,path,embedded=matches[0]
+        if root and normalize(root)!=normalize(embedded):return [],['Заданы разные пути ветки'],root
+        return [path],[],root or embedded
+    selected,unresolved=resolve_structure_resources(subject,paths)
+    if root and len(selected)!=1:return [],['Для ветки нужен один ресурс'],root
+    return selected,unresolved,root
+
+
 def verification_status(data):
     if not data.get("complete"):
         return "incomplete_result"
@@ -225,7 +243,7 @@ def query_graphs(plan, graphs, configured_paths):
         if item not in refs:
             refs.append(item)
     def finish(text):
-        if op in {"materials", "rank", "filter"} or plan.conditions:
+        if op in {"materials", "rank", "filter", "structure"} or plan.conditions:
             result["offset"] = plan.offset
             result["limit"] = plan.limit
             result["has_more"] = plan.offset + len(result["rows"]) < result["total"]
@@ -281,7 +299,7 @@ def query_graphs(plan, graphs, configured_paths):
             subject=""
         materials = [item for item in materials if resolved in item[2].split("/")[:-1]]
     if op == "structure":
-        selected,unresolved=resolve_structure_resources(subject,configured_paths)
+        selected,unresolved,branch_root=structure_target(subject,configured_paths,plan.structure_root)
         if unresolved:
             result["status"]="clarify"
             return finish("Не удалось однозначно выбрать ресурсы: **"+"; ".join(unresolved)+"**. Укажите названия из подключённого списка:\n\n"+"\n".join("- "+path.rsplit("/",1)[-1] for path in configured_paths))
@@ -290,19 +308,25 @@ def query_graphs(plan, graphs, configured_paths):
         for path,g in graphs.items():
             if path not in selected:
                 continue
-            for i,n in enumerate(children(g)):
+            from .graph import select
+            try:branch=select(g,branch_root)
+            except ValueError:
+                result['status']='not_found'
+                return finish('Ветка **'+branch_root+'** не найдена. Найдите точный путь через query_graph или раскройте get_children; родительские разделы не заменяют запрошенную ветку.')
+            base_pointer=next((ptr for n,p,ptr in located_nodes(g) if p==branch_root),'') if branch_root else ''
+            for i,n in enumerate(children(branch)):
                 result["rows"].append([g.get("name",path),label(n),n.get("meta","")])
-                reference(path,f"/successors/{i}",label(n))
+                reference(path,base_pointer+f"/successors/{i}",label(n))
         result["total"] = len(result["rows"])
-        result["rows"] = result["rows"][:plan.limit]
-        result["references"] = refs[:plan.limit]
+        result["rows"] = result["rows"][plan.offset:plan.offset+plan.limit]
+        result["references"] = refs[plan.offset:plan.offset+plan.limit]
         if not result["rows"]:
             result["status"]="empty"
             return finish("В выбранных ресурсах не получены понятия первого уровня. Проверьте доступность и содержимое ресурсов; пустой результат не подтверждает успешное выполнение вопроса.")
         prefix=""
         if "онтолог" in subject.casefold():
             prefix="Подключённые онтологии:\n\n"+"\n".join("- "+p.rsplit("/",1)[-1] for p in result["available_ontologies"])+"\n\n"
-        return finish(prefix+"Понятия первого уровня выбранных ресурсов:\n\n" + table(["Ресурс","Понятие","Тип"], result["rows"])+ (f"\n\nПоказано {len(result['rows'])} из {result['total']} понятий." if result["total"]>len(result["rows"]) else ""))
+        return finish(prefix+(f'Непосредственные дочерние вершины ветки **{branch_root}**:' if branch_root else "Понятия первого уровня выбранных ресурсов:")+"\n\n" + table(["Ресурс","Понятие","Тип"], result["rows"])+ (f"\n\nПоказано {len(result['rows'])} из {result['total']} понятий." if result["total"]>len(result["rows"]) else ""))
     if op == "materials" and not plan.conditions:
         chosen = [item for item in materials if not subject or normalize(subject) in normalize(label(item[1]))]
         required=list(dict.fromkeys([*plan.elements,*([plan.element] if plan.element else [])]))
@@ -437,7 +461,7 @@ def resource_needed(path, operation):
 async def execute_plan(search, paths, plan):
     plan=KnowledgePlan.model_validate(plan)
     graphs,coverage,sources={ },[],[]
-    structure_paths=resolve_structure_resources(plan.subject,paths)[0] if plan.operation=="structure" else None
+    structure_paths=structure_target(plan.subject,paths,plan.structure_root)[0] if plan.operation=="structure" else None
     for path in paths:
         if structure_paths is not None and path not in structure_paths:
             continue
@@ -475,7 +499,7 @@ def verify_result(data, paths):
     """Replay both calculations AND final display against SHA-checked raw snapshots."""
     from . import provenance
     graphs={}
-    needed=set(resolve_structure_resources(data["plan"].get("subject",""),paths)[0]) if data["plan"]["operation"]=="structure" else {p for p in paths if resource_needed(p,data["plan"]["operation"])}
+    needed=set(structure_target(data["plan"].get("subject",""),paths,data['plan'].get('structure_root',''))[0]) if data["plan"]["operation"]=="structure" else {p for p in paths if resource_needed(p,data["plan"]["operation"])}
     coverage=data.get("coverage",[])
     if len(coverage)!=len(needed) or {c.get("path") for c in coverage}!=needed:
         return False

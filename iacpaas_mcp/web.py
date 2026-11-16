@@ -391,11 +391,38 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
 
     async def resource_detail(request):
         path = request.query_params.get("path", "")
+        try:
+            depth=int(request.query_params.get('depth','1'))
+            if not 0<=depth<=5:raise ValueError()
+        except ValueError:return JSONResponse({'error':'depth должен быть от 0 до 5','code':'invalid_request'},status_code=400)
         async with Client(mcp) as client:
-            result = await client.call_tool("get_subgraph", {"path": path, "depth": 2})
+            result = await client.call_tool("get_subgraph", {"path": path, 'root':request.query_params.get('root',''),"depth": depth})
             if result.is_error:
-                return JSONResponse({"error": "Не удалось прочитать ИР. Проверьте путь и доступ"}, status_code=502)
+                return navigation_error(result)
         return JSONResponse(result.structured_content)
+
+    def navigation_error(result):
+        data=result.structured_content or {}
+        error=data.get('error',{})
+        code=error.get('code','tool_error')
+        status={'subgraph_too_large':413,'snapshot_changed':409,'resource_not_found':404,'invalid_request':400,
+                'authentication_required':401,'permission_denied':403,'platform_unavailable':503}.get(code,502)
+        return JSONResponse({'error':error.get('message','Не удалось прочитать ветку графа'),
+                             'code':code,'suggestion':error.get('suggestion',''),'retryable':error.get('retryable',False)},status_code=status)
+
+    async def resource_children(request):
+        path=request.query_params.get('path','')
+        snapshot=request.query_params.get('snapshot','')
+        if not path.strip() or (snapshot and (len(snapshot)!=64 or any(c not in '0123456789abcdef' for c in snapshot))):
+            return JSONResponse({'error':'Нужен путь ресурса и, при продолжении, SHA-256 снимка','code':'invalid_request'},status_code=400)
+        try:
+            offset=int(request.query_params.get('offset','0'));limit=int(request.query_params.get('limit','20'))
+            if offset<0 or not 1<=limit<=20:raise ValueError()
+        except ValueError:return JSONResponse({'error':'Нужны offset ≥ 0 и limit от 1 до 20','code':'invalid_request'},status_code=400)
+        async with Client(mcp) as client:
+            result=await client.call_tool('get_children',{'path':path,
+                'root':request.query_params.get('root',''),'offset':offset,'limit':limit,'expected_snapshot':snapshot})
+        return navigation_error(result) if result.is_error else JSONResponse(result.structured_content)
 
     verification_lock = asyncio.Lock()
     review_tasks = {}
@@ -509,7 +536,7 @@ def create_app(db_path=None, server=None, open_url=None, shutdown_callback=None,
     app = Starlette(lifespan=lifespan, routes=[Route("/", index), Route("/api/health",health),Route("/api/app/stop",stop_application,methods=["POST"]),Route("/api/status", status),
         Route("/api/chats", chats, methods=["GET", "POST"]), Route("/api/chats/{chat_id}", chat_item, methods=["GET", "DELETE"]),
         Route("/api/chats/{chat_id}/branch", branch_chat, methods=["POST"]),
-        Route("/api/chat", send, methods=["POST"]), Route("/api/resources", resources), Route("/api/resource", resource_detail),
+        Route("/api/chat", send, methods=["POST"]), Route("/api/resources", resources), Route("/api/resource", resource_detail),Route('/api/resource/children',resource_children),
         Route("/api/exports/{checksum}", export_snapshot),
         Route("/api/index",index_control,methods=["GET","POST"]),
         Route("/api/chats/{chat_id}/verify",review_answer,methods=["POST"]),

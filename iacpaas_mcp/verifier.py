@@ -36,7 +36,7 @@ def prepare_sources(steps):
         data, tool = step.get("result"), step.get("name", "")
         if step.get("is_error") or not isinstance(data, dict) or data.get("error") or data.get("is_error"):
             continue
-        if tool not in {'query_knowledge','list_inforesources','get_inforesource','get_subgraph','count_graph','query_graph','search_resources','validate_resource'}:
+        if tool not in {'query_knowledge','list_inforesources','get_inforesource','get_subgraph','get_children','count_graph','query_graph','search_resources','validate_resource'}:
             continue
         data={k:v for k,v in data.items() if k not in {'evidence_id','is_error'}}
         if tool == "query_knowledge" and data.get("plan", {}).get("operation") == "catalog":
