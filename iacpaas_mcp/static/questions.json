@@ -399,16 +399,16 @@
   },
   {
     "id": "two-filters",
-    "category": "Уточнения",
+    "category": "Составные условия",
     "question": "Найди материалы с Cr не более 19% и Ni не менее 9%.",
     "plan": {
-      "operation": "clarify",
-      "clarification": "compound"
+      "operation": "filter",
+      "conditions": [{"element":"Cr","op":"le","value":19},{"element":"Ni","op":"ge","value":9}]
     },
     "expected": {
-      "status": "clarify",
+      "status": "ok",
       "contains": [
-        "несколько"
+        "Cr", "Ni"
       ]
     }
   },
@@ -491,5 +491,71 @@
         "≥ 9.0%"
       ]
     }
+  },
+  {
+    "id":"cr-ni-and", "category":"Составные условия",
+    "question":"Найди материалы с Cr не более 19% и Ni не менее 9%. Покажи первые 10.",
+    "plan":{"operation":"filter","conditions":[{"element":"Cr","op":"le","value":19},{"element":"Ni","op":"ge","value":9}],"limit":10},
+    "expected":{"status":"ok","contains":["Cr","Ni"]}
+  },
+  {
+    "id":"cr-present-ni-absent", "category":"Наличие и отсутствие",
+    "question":"В каких материалах указан Cr, но Ni вообще не указан в составе?",
+    "plan":{"operation":"filter","conditions":[{"element":"Cr","op":"present"},{"element":"Ni","op":"absent"}]},
+    "expected":{"status":"ok","contains":["не указан"]}
+  },
+  {
+    "id":"cr-or-ni", "category":"Составные условия",
+    "question":"Покажи материалы, в составе которых указан Cr или Ni. Достаточно одного из элементов.",
+    "plan":{"operation":"filter","condition_mode":"any","conditions":[{"element":"Cr","op":"present"},{"element":"Ni","op":"present"}]},
+    "expected":{"status":"ok","contains":["ИЛИ"]}
+  },
+  {
+    "id":"cr-strict", "category":"Границы интервалов",
+    "question":"Найди материалы, у которых весь допустимый диапазон Cr строго ниже 19%.",
+    "plan":{"operation":"filter","conditions":[{"element":"Cr","op":"lt","value":19}]},
+    "expected":{"status":"ok","contains":["Cr"]}
+  },
+  {
+    "id":"ni-absent", "category":"Наличие и отсутствие",
+    "question":"Сколько материалов не содержат записи о Ni? Нулевой Ni считать указанным.",
+    "plan":{"operation":"filter","conditions":[{"element":"Ni","op":"absent"}],"limit":10},
+    "expected":{"status":"ok","contains":["не указан"]}
+  },
+  {
+    "id":"cr-page-two", "category":"Страницы",
+    "question":"Покажи вторую десятку материалов с указанным Cr, пропустив первые десять.",
+    "plan":{"operation":"filter","conditions":[{"element":"Cr","op":"present"}],"offset":10,"limit":10},
+    "expected":{"status":"ok","contains":["позиции 11"]}
+  },
+  {
+    "id":"cr-ni-class", "category":"Составные условия",
+    "question":"В классе сплавов на основе железа найди Cr не более 19% и Ni не менее 9%.",
+    "plan":{"operation":"filter","class_name":"Сплавы на основе железа","conditions":[{"element":"Cr","op":"le","value":19},{"element":"Ni","op":"ge","value":9}]},
+    "expected":{"status":"ok","contains":["Cr","Ni"]}
+  },
+  {
+    "id":"cr-ni-three", "category":"Составные условия",
+    "question":"Найди материалы с Cr не более 19%, Ni не менее 9% и указанным Ti.",
+    "plan":{"operation":"filter","conditions":[{"element":"Cr","op":"le","value":19},{"element":"Ni","op":"ge","value":9},{"element":"Ti","op":"present"}]},
+    "expected":{"status":"ok","contains":["Ti"]}
+  },
+  {
+    "id":"fe-overview", "category":"Объекты и связи",
+    "question":"О Fe выведи все сведения и связанные вещества и материалы.",
+    "plan":{"operation":"overview","subject":"Fe","entity_meta":"Химический элемент","limit":5},
+    "expected":{"status":"ok","contains":["Связанные вещества","Связанные материалы","26"]}
+  },
+  {
+    "id":"carbon-substances", "category":"Объекты и связи",
+    "question":"Какие вещества связаны с углеродом C? Покажи основания связей.",
+    "plan":{"operation":"overview","subject":"C","entity_meta":"Химический элемент","overview_sections":["substances"]},
+    "expected":{"status":"ok","contains":["Связанные вещества","формуле"]}
+  },
+  {
+    "id":"fe-substances-only", "category":"Объекты и связи",
+    "question":"Выведи только связанные с Fe вещества, без повторения карточки и списка материалов.",
+    "plan":{"operation":"overview","subject":"Fe","entity_meta":"Химический элемент","overview_sections":["substances"]},
+    "expected":{"status":"ok","contains":["Связанные вещества","Найдено"]}
   }
 ]

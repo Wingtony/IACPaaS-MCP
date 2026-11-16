@@ -4,6 +4,14 @@ import json
 import os
 
 
+def execution_limits(max_steps=None):
+    steps=int(os.getenv('AGENT_MAX_STEPS','12')) if max_steps is None else max_steps
+    stagnant=int(os.getenv('AGENT_MAX_STAGNANT','3'))
+    if type(steps) is not int or not 1<=steps<=60:raise ValueError('AGENT_MAX_STEPS должен быть от 1 до 60')
+    if not 1<=stagnant<=5:raise ValueError('AGENT_MAX_STAGNANT должен быть от 1 до 5')
+    return steps,stagnant
+
+
 def context_settings():
     """Per-request configuration shared by Ollama and application packing."""
     context = int(os.getenv("AGENT_CONTEXT_LENGTH", "32768"))

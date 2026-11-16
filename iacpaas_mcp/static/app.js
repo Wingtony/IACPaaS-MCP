@@ -10,7 +10,7 @@ function toast(message) { $('toast').textContent = message; $('toast').hidden = 
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers: {'Content-Type':'application/json', 'X-CSRF-Token':csrf, ...(options.headers || {})}});
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Ошибка сервера: ${response.status}`);
+  if (!response.ok) {const error=new Error([typeof data.error==='string'?data.error:`Ошибка сервера: ${response.status}`,data.suggestion].filter(Boolean).join(' · '));error.code=data.code;throw error;}
   return data;
 }
 function inline(text) {
@@ -93,14 +93,17 @@ function stepsHTML(steps, busy = false) {
 function planHTML(report){if(!report?.query_plan)return '';const p=report.query_plan;const names={resources:'Список ресурсов',structure:'Структура баз',materials:'Марки и количество',composition:'Химический состав',element:'Химический элемент',property:'Описание свойства',term:'Карточка термина',rank:'Рейтинг материалов',filter:'Отбор материалов',compare:'Сравнение состава',clarify:'Нужно уточнение'};const detail=[p.subject,p.class_name,p.element].filter(Boolean).join(' · ');return `<div class="interpreted-query">${escapeHTML(names[p.operation]||p.operation)}${detail ? ' · '+escapeHTML(detail):''}</div>`;}
 function assistantHeading(model = config.model) { return '<div class="assistant-heading"><img src="/static/logo.svg" alt="">IACPaaS<span><small>'+escapeHTML(model || 'QWEN')+'</small></span></div>'; }
 function verificationHTML(report) {
-  if(report?.status==='verified_result' && report.rows===0) report={...report,status:'empty_result'};
+  if(report?.status==='verified_result' && report.rows===0 && report.query_plan?.operation!=='overview') report={...report,status:'empty_result'};
   if (!report?.status) report={status:'not_verified',scope:'',notice:'Для этого исторического ответа проверка не выполнялась. Повторите вопрос, чтобы получить ссылки на снимок базы.'};
-  const checked = ['verified_fields','verified_result'].includes(report.status);
-  const statusLabel={blocked:'Ответ не прошёл проверку',needs_clarification:'Запрос требует уточнения',empty_result:'Совпадений нет — проверьте условия',incomplete_result:'Результат неполный: часть баз недоступна',incomplete:'Полнота ответа не подтверждена'}[report.status] || 'Нет проверенных фактов базы';
+  const checked = ['verified_fields','verified_result'].includes(report.status) && report.data_verified!==false;
+  const statusLabel={capabilities:'Справка о возможностях',verified_result:'Результат получен; сверка со снимками не применима',blocked:'Ответ не прошёл проверку',needs_clarification:'Запрос требует уточнения',empty_result:'Совпадений нет — проверьте условия',incomplete_result:'Результат неполный: часть баз недоступна',incomplete:report.data_verified?'Данные сверены; вопрос выполнен частично':'Полнота ответа не подтверждена'}[report.status] || 'Нет проверенных фактов базы';
   const sources = report.sources || [];
+  const coverageSummary=(sources.length||report.request_coverage)?`<div class="coverage-summary"><span><strong>Данные:</strong> ${checked||report.data_verified?'сверены с источниками':'сверка со снимками не подтверждена'}</span><span><strong>Части вопроса:</strong> ${report.request_coverage?.missing?.length?'остались невыполненные':report.request_coverage?.evaluated?'проверены приложением':'отдельно не проверялись'}</span></div>`:'';
   const snapshots = sources.flatMap(source=>source.exports||[]);
-  const extraProof = snapshots.length ? `<div class="search-coverage"><strong>Экспорты проверенных баз</strong>${snapshots.map(source=>/^[a-f0-9]{64}$/.test(source.export_sha256||'') ? `<a href="/api/exports/${source.export_sha256}" download>${escapeHTML(source.path)} · ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}</a>`:'').join('')}</div>` : '';
-  return `<details class="verification ${checked ? 'checked' : 'unverified'}"><summary>${icon(checked ? 'check' : 'info')}<span>${checked ? (report.status === 'verified_result' ? 'Данные и расчёты сверены со снимками' : 'Поля сверены со снимком') : statusLabel}</span><span>${checked ? (report.status === 'verified_result' ? (Number.isInteger(report.rows)?'Строк: '+report.rows:'Источников: '+sources.length) : 'Поля: '+report.claims.length) : ''}</span></summary><div class="verification-body">${report.query_plan ? `<div class="query-plan"><strong>Как понят вопрос</strong><pre>${escapeHTML(JSON.stringify(report.query_plan,null,2))}</pre><small>Если выбран неверный объект или условие, отредактируйте вопрос.</small></div>` : ''}<p><strong>Область запроса:</strong> ${escapeHTML(report.scope || 'Все подключённые базы')}</p><p>${escapeHTML(report.notice || '')}</p>${report.assessment ? `<p><strong>Оценка достаточности агентом:</strong> ${escapeHTML(report.assessment)}</p>` : ''}${sources.map(source => `<div class="source-proof"><strong>${escapeHTML(source.id)} · ${escapeHTML(source.tool)}</strong><pre>${escapeHTML(JSON.stringify(source.arguments,null,2))}</pre><small>Получено: ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}<br>SHA-256 результата: ${escapeHTML(source.sha256)}</small>${source.export?.export_sha256 && /^[a-f0-9]{64}$/.test(source.export.export_sha256) ? `<a href="/api/exports/${source.export.export_sha256}" download>Скачать исходный снимок экспорта</a>` : ''}</div>`).join('')}${extraProof}</div></details>`;
+  const partLabels={answered:'проверено',no_matches:'поиск выполнен, совпадений нет',missing:'не проверено',unavailable:'недоступно'};
+  const taskProof=report.request_coverage?`<div class="source-proof"><strong>Выполнение частей вопроса</strong>${report.request_coverage.parts.length?report.request_coverage.parts.map(p=>`<p>${escapeHTML(p.label)}: ${escapeHTML(partLabels[p.status]||p.status)}</p>`).join(''):'<p>Отдельный контроль частей для этого вопроса не задан; достаточность оценила модель.</p>'}<p>Сверка значений с базой и полнота ответа — разные проверки.</p></div>`:'';
+  const extraProof = taskProof + (snapshots.length ? `<div class="search-coverage"><strong>Экспорты проверенных баз</strong>${snapshots.map(source=>/^[a-f0-9]{64}$/.test(source.export_sha256||'') ? `<a href="/api/exports/${source.export_sha256}" download>${escapeHTML(source.path)} · ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}</a>`:'').join('')}</div>` : '');
+  return coverageSummary + `<details class="verification ${checked ? 'checked' : 'unverified'}"><summary>${icon(checked ? 'check' : 'info')}<span>${checked ? (report.status === 'verified_result' ? 'Данные и расчёты сверены со снимками' : 'Поля сверены со снимком') : statusLabel}</span><span>${checked ? (report.status === 'verified_result' ? (Number.isInteger(report.rows)?'Строк: '+report.rows:'Источников: '+sources.length) : 'Поля: '+report.claims.length) : ''}</span></summary><div class="verification-body">${report.query_plan ? `<div class="query-plan"><strong>Как понят вопрос</strong><pre>${escapeHTML(JSON.stringify(report.query_plan,null,2))}</pre><small>Если выбран неверный объект или условие, отредактируйте вопрос.</small></div>` : ''}<p><strong>Область запроса:</strong> ${escapeHTML(report.scope || 'Все подключённые базы')}</p><p>${escapeHTML(report.notice || '')}</p>${report.assessment ? `<p><strong>Оценка достаточности агентом:</strong> ${escapeHTML(report.assessment)}</p>` : ''}${sources.map(source => `<div class="source-proof"><strong>${escapeHTML(source.id)} · ${escapeHTML(source.tool)}</strong><pre>${escapeHTML(JSON.stringify(source.arguments,null,2))}</pre><small>Получено: ${escapeHTML(new Date(source.retrieved_at).toLocaleString('ru'))}<br>SHA-256 результата: ${escapeHTML(source.sha256)}</small>${source.export?.export_sha256 && /^[a-f0-9]{64}$/.test(source.export.export_sha256) ? `<a href="/api/exports/${source.export.export_sha256}" download>Скачать исходный снимок экспорта</a>` : ''}</div>`).join('')}${extraProof}</div></details>`;
 }
 function renderMessages() {
   $('welcome').hidden = !!current?.messages.length; $('messages').replaceChildren();
@@ -115,7 +118,43 @@ function renderMessages() {
       const footer = document.createElement('div'); footer.className = 'message-footer';
       const tokens = message.metrics?.tokens_out; footer.innerHTML = `<span>${message.seconds ?? 0} с</span>${tokens ? `<span>${tokens.toLocaleString('ru')} ${message.verification?.query_plan ? 'токенов плана' : 'токенов ответа'}</span>` : ''}<span>Вызовы MCP: ${(message.steps || []).length}</span>${message.context?.compressed ? `<span>Контекст сжат: ≈${message.context.before_estimate} → ≈${message.context.after_estimate}</span>` : ''}`;
       const copy = document.createElement('button'); copy.className = 'copy-button'; copy.innerHTML = icon('copy') + 'Копировать'; copy.onclick = () => navigator.clipboard.writeText(message.content).then(() => toast('Ответ скопирован')).catch(() => toast('Не удалось скопировать ответ'));
-      footer.append(copy); article.append(footer);
+      footer.append(copy);
+      const pageResult=[...(message.steps || [])].reverse().find(s=>s.name==='query_knowledge' && !s.is_error)?.result;
+      if(messageIndex===current.messages.length-1 && pageResult?.has_more && message.status==='done'){
+        const next=document.createElement('button');next.className='copy-button';next.textContent='Следующие '+pageResult.limit;
+        next.onclick=()=>{if(runId)return;$('question').value='Покажи следующие '+pageResult.limit;sendMessage();};footer.append(next);
+      }
+      if (message.status === 'done' && message.steps?.some(s=>!s.is_error)) {
+        const review=document.createElement('button'); review.className='copy-button'; review.textContent='Проверить смысл · LLM';
+        review.title='Повторная сверка источников и выборочная проверка до 8 утверждений моделью, до 120 секунд. Облачный запрос оплачивается провайдеру.';
+        review.onclick=async()=>{
+          if(config.review_version!==3){toast('Перезапустите Web-приложение и обновите страницу: сервер использует старую проверку.');return;}
+          const chatId=current.id,started=Date.now();review.disabled=true;
+          const tick=()=>{review.textContent=`Проверка: ${Math.floor((Date.now()-started)/1000)} с / 120 с`;};tick();
+          const timer=setInterval(tick,1000),cancel=document.createElement('button');cancel.className='copy-button';cancel.textContent='Отменить проверку';footer.append(cancel);
+          cancel.onclick=async()=>{cancel.disabled=true;try{await api('/api/chats/'+chatId+'/verify/cancel',{method:'POST',body:'{}'});}catch(error){toast(error.message);cancel.disabled=false;}};
+          try{await api('/api/chats/'+chatId+'/verify',{method:'POST',body:JSON.stringify({index:messageIndex})});if(current?.id===chatId)await selectChat(chatId);else toast('Проверка завершена и сохранена');}
+          catch(error){toast(error.message);}
+          finally{clearInterval(timer);cancel.remove();review.disabled=false;review.textContent='Проверить смысл · LLM';}
+        };
+        footer.append(review);
+      }
+      article.append(footer);
+      if (message.claim_review) {
+        const panel=document.createElement('details'); panel.className='verification';
+        const report=message.claim_review;const summary=document.createElement('summary');
+        summary.textContent=report.version>=2?`Смысловая проверка: подтверждено ${report.confirmed} из ${report.total}${report.reference_errors?' · ошибок ссылок: '+report.reference_errors:''}`:'Устаревший результат проверки — запустите новую';panel.append(summary);
+        const notice=document.createElement('p');notice.textContent=report.notice;panel.append(notice);
+        if(report.version>=2){
+          const labels={confirmed:'Поддерживается источником',not_in_data:'Недостаточно данных',contradicted:'Противоречит источнику',reference_error:'Ошибка ссылки проверяющего'};
+          const proof=document.createElement('p');proof.className='review-replay';proof.textContent=`Повторная сверка MCP: ${report.replay?.length||0} результатов · ${report.seconds} с`;panel.append(proof);
+          for(const claim of report.claims){const row=document.createElement('div');row.className='review-claim';const label=document.createElement('strong');label.textContent=labels[claim.status]||claim.status;
+            const quote=document.createElement('p');quote.textContent=claim.quote;row.append(label,quote);
+            if(claim.evidence){const evidence=document.createElement('p');evidence.className='review-evidence';evidence.textContent='Источник: '+claim.evidence;row.append(evidence);}
+            if(claim.pointer){const ref=document.createElement('small');ref.textContent=claim.source_id+claim.pointer;row.append(ref);}panel.append(row);}
+        }else{const legacy=document.createElement('p');legacy.textContent='Старая проверка смешивала ошибки формата ссылки с отсутствием данных и допускала ссылку на сам ответ. Этот результат нельзя считать достоверным.';panel.append(legacy);}
+        article.append(panel);
+      }
     }
     $('messages').append(article);
   }
@@ -170,6 +209,7 @@ function showApproval(event) {
 async function sendMessage(event) {
   event?.preventDefault(); if (runId || submitting) return;
   const message = $('question').value.trim(); if (!message) return;
+  if(config.dialogue_version!==1){toast('Перезапустите Web-приложение и обновите страницу: сервер использует старую логику диалога.');return;}
   if (!config.model_available) { toast('Модель недоступна. Проверьте настройки моделей и API или запуск Ollama.'); return; }
   submitting = true; $('send').disabled = true;
   try {
@@ -192,14 +232,34 @@ async function loadResources() {
       button.onclick=async()=>{
         const existing=card.querySelector('.resource-tree');if(existing){existing.remove();button.textContent='Посмотреть структуру';return;}
         button.disabled=true;button.textContent='Загрузка…';
-        try { const result=await api('/api/resource?path='+encodeURIComponent(resource.path));const tree=document.createElement('div');tree.className='resource-tree';tree.append(treeNode(result.graph));card.append(tree);button.textContent='Свернуть'; }
+        try { const result=await api('/api/resource/children?path='+encodeURIComponent(resource.path));const tree=document.createElement('div');tree.className='resource-tree';tree.append(navigationNode({graph:result.parent,path:'',has_children:result.total>0},resource.path,result._source.export_sha256,result));card.append(tree);button.textContent='Свернуть'; }
         catch(error){toast(error.message);button.textContent='Повторить';}finally{button.disabled=false;}
       };
       $('resources').append(card);
     }
   }catch(error){$('resources').textContent=error.message;}
 }
-function treeNode(node){const branch=document.createElement(node.successors?.length?'details':'div');branch.className='tree-node';if(branch.tagName==='DETAILS')branch.open=true;const label=document.createElement(branch.tagName==='DETAILS'?'summary':'span');label.textContent=node.name ?? node.value ?? (node.link?'↗ Ссылка':'Вершина');const meta=document.createElement('small');meta.textContent=node.meta||node.type||'';label.append(meta);branch.append(label);for(const child of node.successors||[])branch.append(treeNode(child));return branch;}
+function navigationNode(info,resourcePath,snapshot,initialPage=null){
+ const branch=document.createElement(info.has_children?'details':'div');branch.className='tree-node';
+ const label=document.createElement(info.has_children?'summary':'span'),node=info.graph;
+ const value=node.value??(node.value_preview?node.value_preview+'…':null);
+ label.textContent=(info.is_link?'↗ ':'')+(node.name?(node.name+(value!==null?': '+value:'')):(value??'Вершина'));
+ const meta=document.createElement('small');meta.textContent=node.meta||node.type||'';label.append(meta);branch.append(label);
+ if(!info.has_children)return branch;
+ const content=document.createElement('div');branch.append(content);let loaded=false,busy=false,next=0,more=null;
+ const error=document.createElement('p');error.className='tree-error';error.setAttribute('role','alert');
+ const apply=page=>{more?.remove();for(const child of page.children)content.append(navigationNode(child,resourcePath,page._source.export_sha256));loaded=true;next=page.next_offset;snapshot=page._source.export_sha256;
+  if(page.has_more){more=document.createElement('button');more.className='tree-more';more.textContent=`Показать ещё · ${page.offset+page.children.length} из ${page.total}`;more.onclick=()=>load();content.append(more);}
+ };
+ const load=async()=>{if(busy)return;busy=true;error.remove();if(more)more.disabled=true;
+  try{const query=new URLSearchParams({path:resourcePath,root:info.path,offset:String(next??0),limit:'20',snapshot});apply(await api('/api/resource/children?'+query));}
+  catch(e){error.textContent=e.message;content.append(error);if(!loaded&&!more){more=document.createElement('button');more.className='tree-more';more.textContent='Повторить загрузку';more.onclick=()=>load();content.append(more);}}
+  finally{busy=false;if(more)more.disabled=false;}
+ };
+ branch.addEventListener('toggle',()=>{if(branch.open&&!loaded)load();});
+ if(initialPage){apply(initialPage);branch.open=true;}
+ return branch;
+}
 function closeSidebar(){document.body.classList.remove('mobile-open');}
 function theme(value){document.documentElement.dataset.theme=value;localStorage.setItem('iacpaas-theme',value);$('theme-toggle').innerHTML=icon(value==='dark'?'sun':'moon');}
 async function loadResourceChoices(){const resources=await api('/api/resources');const selector=$('resource-selector');selector.replaceChildren(new Option('Все подключённые базы',''));for(const resource of resources.resources)selector.append(new Option(resource.path,resource.path));const selected=localStorage.getItem('iacpaas-search-scope-v2');if(resources.resources.some(resource=>resource.path===selected))selector.value=selected;}
@@ -211,14 +271,15 @@ async function openAccountSettings(){
 async function refreshStatus(){
   config=await api('/api/status');csrf=config.csrf;
   if(!current && !runId && config.context_length)$('context-indicator').textContent=`Контекст: ${config.context_length/1024}K · бюджет ≈${config.context_budget}`;
-  $('model-name').textContent=config.model;document.getElementById('model-location').textContent=config.cloud?'Облачный API':'Qwen на вашем ПК';$('composer-model').textContent=config.model+(config.cloud?' · облако':' · локально');
+  $('model-name').textContent=config.model;document.getElementById('model-location').textContent=config.cloud?'Облачный API':'Ваш сервер Ollama';$('composer-model').textContent=config.model+(config.cloud?' · облако':' · Ollama');
+  $('stop-app').disabled=!!config.docker;$('stop-app').title=config.docker?'Остановка контейнера: docker compose stop atlas. Ollama управляется отдельно.':'Остановить приложение';
   $('model-dot').classList.toggle('offline',!config.model_available);
   const mock=config.backend==='mock';
   $('workspace-name').textContent=mock?'Учебное пространство':'Фонд IACPaaS';$('workspace-description').textContent=mock?'Демонстрационные данные':'Ресурсы из конфигурации';
   $('welcome-note').textContent=mock?'Учебная база подключена. Можно исследовать.':'Настроено подключение к IACPaaS. Данные проверяются при запросе.';
   $('backend-hint').textContent=(mock?'Учебные данные':'IACPaaS')+` · MCP ${config.tools}`;
   $('connection-notice').hidden=config.model_available;
-  $('connection-notice').textContent=config.cloud?'Для облачной модели сохраните API-ключ в разделе «Модели и API».':'Qwen выключена. Чтобы начать диалог, запустите Start-Web.cmd.';
+  $('connection-notice').textContent=config.cloud?'Для облачной модели сохраните API-ключ в разделе «Модели и API».':'Ollama недоступна или модель не найдена. Укажите адрес Ollama и точное имя модели в разделе «Модели и API».';
   setState(runId?'Агент работает':config.model_available?(config.cloud?'Облако настроено · доступ не проверен':'Агент готов к работе'):'Модель выключена',!!runId);
 }
 $('new-chat').onclick=resetChat;$('search').oninput=history;$('composer').onsubmit=sendMessage;
@@ -261,7 +322,8 @@ function modelFields() {
   $('llm-key').value='';$('llm-delete-key').checked=false;$('llm-key').disabled=local;$('llm-delete-key').disabled=local;
   $('llm-key-status').textContent=local?'Ollama работает без API-ключа.':item.key_source==='environment'?'Ключ задан переменной окружения. Она имеет приоритет; удаление здесь затронет только сохранённую копию.':item.key_saved?'Ключ сохранён на сервере. Пустое поле оставит его прежним.':'Ключ ещё не сохранён.';
   $('llm-disclosure').hidden=local;$('llm-error').hidden=true;$('llm-test-result').textContent='';
-  $('llm-check').disabled=local||item.id!==modelSettings.provider;
+  $('llm-endpoint-label').hidden=!local;$('llm-endpoint').value=modelSettings.ollama_url||'';$('llm-endpoint').required=local;
+  $('llm-check').disabled=item.id!==modelSettings.provider;
 }
 async function openModelSettings() {
   try {
@@ -279,14 +341,28 @@ $('model-dialog').addEventListener('close',()=>{$('llm-key').value='';});
 $('model-form').onsubmit=async event=>{
   event.preventDefault();$('llm-save').disabled=true;$('llm-error').hidden=true;
   try {
-    modelSettings=await api('/api/llm',{method:'POST',body:JSON.stringify({provider:$('llm-provider').value,model:$('llm-model').value.trim(),api_key:$('llm-key').value.trim(),delete_key:$('llm-delete-key').checked})});
+    modelSettings=await api('/api/llm',{method:'POST',body:JSON.stringify({provider:$('llm-provider').value,model:$('llm-model').value.trim(),api_key:$('llm-key').value.trim(),delete_key:$('llm-delete-key').checked,...($('llm-provider').value==='ollama'?{ollama_url:$('llm-endpoint').value.trim()}:{})})});
     $('llm-key').value='';modelFields();await refreshStatus();$('question').dispatchEvent(new Event('input'));toast('Модель сохранена');
   } catch(error){$('llm-error').hidden=false;$('llm-error').textContent=error.message;}
   finally{$('llm-save').disabled=false;}
 };
 $('llm-check').onclick=async()=>{
   $('llm-check').disabled=true;$('llm-test-result').textContent='Проверяю сохранённую модель…';
-  try {const result=await api('/api/llm/check',{method:'POST',body:'{}'});$('llm-test-result').textContent=`API отвечает: ${result.model}. Токены: ${result.tokens_in} вход / ${result.tokens_out} выход.`;}
+  try {const result=await api('/api/llm/check',{method:'POST',body:'{}'});
+    if(result.local){$('llm-test-result').textContent=`Ollama доступна: ${result.endpoint}. ${result.available?'Модель найдена.':'Выбранная модель не найдена.'} Доступны: ${result.models.join(', ')||'нет установленных моделей'}`;$('llm-model-list').innerHTML=result.models.map(m=>`<option value="${escapeHTML(m)}"></option>`).join('');}
+    else $('llm-test-result').textContent=`API отвечает: ${result.model}. Токены: ${result.tokens_in} вход / ${result.tokens_out} выход.`;}
   catch(error){$('llm-test-result').textContent=error.message;}
   finally{$('llm-check').disabled=false;}
 };
+
+const atlasIndexButtons=document.createElement('div');atlasIndexButtons.className='index-controls';
+const atlasIndexStatus=document.createElement('pre');atlasIndexStatus.className='index-status';
+for(const [label,force] of [['Сверить изменения IACPaaS',false],['Загрузить все ресурсы заново',true]]){
+ const button=document.createElement('button');button.className='copy-button';button.textContent=label;
+ button.onclick=async()=>{button.disabled=true;atlasIndexStatus.textContent='Сверяю ресурсы…';try{
+ const result=await api('/api/index',{method:'POST',body:JSON.stringify({force})});
+ atlasIndexStatus.textContent=result.resources.map(r=>`${r.path}: ${r.status}${r.source?.retrieved_at?' · снимок '+r.source.retrieved_at:''}${r.error?' · '+r.error:''}`).join('\n');
+ }catch(error){atlasIndexStatus.textContent=error.message;}finally{button.disabled=false;}};
+ atlasIndexButtons.append(button);
+}
+$('resources').before(atlasIndexButtons,atlasIndexStatus);

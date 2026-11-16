@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 from mcp import Client
+from iacpaas_mcp.confirmation import elicitation_handler
 
 from iacpaas_mcp.agent import run_agent
 from iacpaas_mcp.adaptive_agent import decision_schema, messages_for
@@ -34,6 +35,8 @@ def harness(tmp_path,monkeypatch):
             body=json.loads(request.content);requests.append(body)
             assert len(requests)<=len(decisions),'Unexpected model request'
             decision=decisions[len(requests)-1]
+            if '__timeout__' in decision:raise httpx.ReadTimeout('test timeout',request=request)
+            if '__payload__' in decision:return httpx.Response(200,json=decision['__payload__'])
             text=json.dumps(decision,ensure_ascii=False)
             if provider=='openai':
                 return httpx.Response(200,json={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':text}]}]})
@@ -44,7 +47,7 @@ def harness(tmp_path,monkeypatch):
             return httpx.Response(200,json={'message':{'content':text},'prompt_eval_count':10,'eval_count':5})
         monkeypatch.setattr('iacpaas_mcp.adaptive_agent.httpx.AsyncClient',lambda **kw:original(transport=httpx.MockTransport(reply),**kw))
         async def run():
-            async with Client(build_server(backend=backend,allow_write=approve is not None)) as client:
+            async with Client(build_server(backend=backend,allow_write=approve is not None), elicitation_callback=elicitation_handler(approve)) as client:
                 return await run_agent(client,question,'test-model','http://ollama.test',tmp_path/'adaptive.jsonl',
                     approve=approve,on_event=events.append,max_steps=max_steps,llm_config=ModelConfig(provider,'test-model','test-key'),**options)
         return asyncio.run(run()),events,requests,backend
@@ -60,6 +63,111 @@ def test_dependent_calls_are_selected_after_actual_results(harness,provider):
     assert PATH in json.dumps(messages,ensure_ascii=False)
     report=next(e for e in events if e['event']=='verification')
     assert report['status']=='verified_result' and not report['meaning_verified']
+
+
+def overview_backend():
+    backend=MockBackend()
+    backend.resources={'Загрузки/База химических элементов и веществ':{'type':'КОРЕНЬ','successors':[
+        {'name':'Железо','meta':'Химический элемент','successors':[{'meta':'обозначение','value':'Fe'},{'meta':'порядковый номер','value':26}]},
+        {'name':'Оксид','meta':'Химическое вещество','successors':[{'meta':'обозначение','value':'Fe₂O₃'}]}]}}
+    return backend
+
+
+def test_capabilities_are_answered_from_actual_tools_without_model(harness):
+    answer,events,requests,_=harness([],question='Что ты можешь сделать?')
+    assert not requests and 'Могу исследовать' in answer and 'ресурсов: **1**' in answer
+    assert next(e for e in events if e['event']=='verification')['status']=='capabilities'
+
+
+def test_thirty_steps_do_not_repeat_successful_read_and_keep_verified_result(harness):
+    answer,events,requests,_=harness([call('count_graph',path=PATH)]*30,max_steps=30)
+    assert len(requests)==4
+    assert len([e for e in events if e['event']=='tool'])==1
+    report=next(e for e in events if e['event']=='verification')
+    assert report['stop_reason']=='no_progress' and report['data_verified'] and not report['complete']
+    assert 'Вершины: **8**' in answer and 'Остановлены повторы' in answer
+
+
+def test_thinking_without_decision_stops_with_diagnostic(harness):
+    answer,events,requests,_=harness([{'__payload__':{'message':{'content':'','thinking':'reasoning'}}}]*3,max_steps=30)
+    assert len(requests)==3 and all(r['think'] is False for r in requests)
+    assert 'thinking' in answer and 'think=false' in answer
+    assert not any(e['event']=='tool' for e in events)
+
+
+def test_different_limits_without_new_data_do_not_evade_progress_guard(harness):
+    answer,events,requests,_=harness([call('query_knowledge',plan={'operation':'resources','limit':n}) for n in range(1,5)],max_steps=30,question='Покажи список ресурсов')
+    assert len(requests)==4 and 'Учебные/База наблюдений' in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='no_progress'
+
+
+def test_output_exhaustion_preserves_already_verified_data(harness):
+    answer,events,_,_=harness([call('count_graph',path=PATH),{'__payload__':{'done_reason':'length','message':{'content':''}}}])
+    assert 'Вершины: **8**' in answer and 'лимит вывода' in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='model_output_limit'
+
+
+def test_model_timeout_preserves_already_verified_data(harness):
+    answer,events,_,_=harness([call('count_graph',path=PATH),{'__timeout__':True}])
+    assert 'Вершины: **8**' in answer and 'не ответила' in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='model_timeout'
+
+
+@pytest.mark.parametrize('question',['Топ пять самых прочных сплавов','Топ сплав для ракетостроения по свойствам угодным этой области'])
+def test_unsupported_ranking_requests_criteria_without_arbitrary_alloy(harness,question):
+    answer,events,requests,_=harness([],question=question)
+    assert not requests and 'измеряемый критерий' in answer and 'ВТ20Л' not in answer
+    assert next(e for e in events if e['event']=='verification')['stop_reason']=='criteria_required'
+
+
+def test_broad_question_cannot_be_reduced_to_two_element_fields(harness):
+    answer,events,_,_=harness([call('query_knowledge',plan={'operation':'element','subject':'Fe'}),finish('S1')],
+        backend=overview_backend(),question='О Fe выведи все сведения и связанных веществах')
+    assert 'Связанные вещества' in answer and 'Оксид' in answer
+    report=next(e for e in events if e['event']=='verification')
+    assert report['complete'] and report['data_verified'] and not report['request_coverage']['missing']
+    assert report['query_plan']['operation']=='overview'
+
+
+def test_premature_finish_replans_instead_of_claiming_all_parts_done(harness):
+    path='Загрузки/База химических элементов и веществ'
+    answer,events,_,_=harness([call('count_graph',path=path),finish('S1'),
+        call('query_knowledge',plan={'operation':'overview','subject':'Fe'}),finish('S2')],backend=overview_backend(),
+        question='Выведи все сведения об Fe и связанные вещества')
+    assert 'Оксид' in answer
+    assert any(e['event']=='replanning' and 'Не выполнены части' in e['message'] for e in events)
+
+
+def test_budget_exhaustion_keeps_verified_values_but_marks_missing_parts(harness):
+    path='Загрузки/База химических элементов и веществ'
+    answer,events,_,_=harness([call('count_graph',path=path)],backend=overview_backend(),max_steps=1,
+        question='Все сведения об Fe и связанные вещества')
+    report=next(e for e in events if e['event']=='verification')
+    assert report['status']=='incomplete' and report['data_verified'] and not report['complete']
+    assert 'Не выполнены части вопроса' in answer
+
+
+def test_compound_structure_and_count_need_both_tools(harness):
+    answer,events,_,_=harness([call('count_graph',path=PATH),finish('S1'),call('get_subgraph',path=PATH,root='',depth=1),finish('S1','S2')],
+        question='Покажи структуру графа и посчитай количество вершин')
+    report=next(e for e in events if e['event']=='verification')
+    assert report['complete'] and len(report['request_coverage']['parts'])==2
+
+
+def test_known_object_followup_refreshes_data_without_model_reusing_old_text(harness):
+    answer,events,requests,_=harness([],backend=overview_backend(),question='А какие связанные вещества нашлись?',
+        history=[{'role':'assistant','content':'Старая карточка Fe','query_plan':{'operation':'element','subject':'Fe'}}])
+    assert not requests and 'Оксид' in answer and 'Карточка объекта' not in answer
+    assert 'Связанные материалы' not in answer
+    report=next(e for e in events if e['event']=='verification')
+    assert report['complete'] and report['data_verified']
+
+
+def test_model_cannot_request_generic_clarification_before_searching_explicit_element(harness):
+    clarify={'action':'clarify','call':None,'evidence_ids':[],'question':'Что именно вас интересует?','sufficient':False,'assessment':'Нужно уточнение'}
+    answer,events,_,_=harness([clarify,call('query_knowledge',plan={'operation':'element','subject':'Fe'}),finish('S1')],
+        backend=overview_backend(),question='Расскажи о Fe')
+    assert 'Оксид' in answer and any(e['event']=='replanning' for e in events)
 
 
 def test_api_error_is_given_to_model_before_replanning(harness):
@@ -151,7 +259,7 @@ def test_all_mcp_tools_have_typed_output_and_runtime_diagnostics():
             assert counts['properties']['nodes']['type']=='integer'
             bad=await client.call_tool('count_graph',{'path':'bad'})
             error=json.loads(bad.content[0].text)['error']
-            assert bad.is_error and error['tool']=='count_graph' and error['retryable'] and error['suggestion']
+            assert bad.is_error and error['tool']=='count_graph' and error['code']=='resource_not_found' and error['retryable'] is False and error['suggestion']
     asyncio.run(run())
 
 

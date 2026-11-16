@@ -27,6 +27,37 @@ def headers(client):
     return {"x-csrf-token": client.get("/api/status").json()["csrf"]}
 
 
+def completed_review_chat(client,tmp_path):
+    chat=client.post('/api/chats',headers=headers(client),json={}).json()
+    chat['messages']=[{'role':'user','content':'Сколько?'},{'role':'assistant','content':'8 вершин','status':'done','steps':[]}]
+    Store(tmp_path/'web.sqlite3').save(chat)
+    return chat['id']
+
+
+def test_review_timeout_is_not_saved_as_a_verdict(web_client,tmp_path,monkeypatch):
+    chat_id=completed_review_chat(web_client,tmp_path)
+    async def timeout(*args):raise httpx.ReadTimeout('test timeout')
+    monkeypatch.setattr('iacpaas_mcp.verifier.verify_answer',timeout)
+    response=web_client.post('/api/chats/'+chat_id+'/verify',headers=headers(web_client),json={'index':1})
+    assert response.status_code==408
+    assert 'claim_review' not in web_client.get('/api/chats/'+chat_id).json()['messages'][1]
+
+
+def test_review_can_be_cancelled_without_saving_partial_result(web_client,tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    started=threading.Event();chat_id=completed_review_chat(web_client,tmp_path)
+    async def slow(*args):started.set();await asyncio.sleep(10)
+    monkeypatch.setattr('iacpaas_mcp.verifier.verify_answer',slow)
+    h=headers(web_client)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(web_client.post,'/api/chats/'+chat_id+'/verify',headers=h,json={'index':1})
+        assert started.wait(3)
+        assert web_client.post('/api/chats/'+chat_id+'/verify/cancel',headers=h,json={}).status_code==200
+        assert future.result(timeout=3).status_code==409
+    assert 'claim_review' not in web_client.get('/api/chats/'+chat_id).json()['messages'][1]
+
+
 def test_pages_and_local_security(web_client):
     client = web_client
     page = client.get("/")
@@ -35,7 +66,9 @@ def test_pages_and_local_security(web_client):
     assert client.get("/static/app.js").status_code == 200
     assert len(client.get("/static/questions.json").json()) >= 31
     assert client.get("/api/status").json()["context_length"] == 32768
-    assert client.get("/api/status").json()["tools"] == 10
+    assert client.get("/api/status").json()["tools"] == 17
+    assert client.get('/api/status').json()['review_version']==3
+    assert client.get('/api/status').json()['dialogue_version']==1
     assert client.get("/api/status", headers={"Host":"evil.example"}).status_code == 403
     assert client.post("/api/chats", json={}).status_code == 403
     assert client.post("/api/chats", json={}, headers={**headers(client), "Origin":"https://evil.example"}).status_code == 403

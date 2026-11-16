@@ -1,4 +1,5 @@
 """Explicit MCP demonstration on newly created resources; never modifies supplied databases."""
+from .paths import ENV_FILE, LOGS, ollama_url as configured_ollama_url
 import argparse
 import asyncio
 import copy
@@ -13,11 +14,12 @@ from mcp import Client
 
 from .backend import HttpBackend, MockBackend
 from .credentials import load_account
+from .confirmation import elicitation_handler
 from .graph import counts, validate, walk
 from .server import PROJECT, build_server
 
 
-def bundle(suffix, fund='demo@example.invalid/Мой Фонд', folder='Загрузки'):
+def bundle(suffix, fund='demo@example.invalid/Мой Фонд', folder='АТЛАС демо'):
     """Only synthetic project data; no copies of the supplied material databases."""
     ontology_title='АТЛАС - онтология проектов '+suffix
     data_title='АТЛАС - учебные проекты '+suffix
@@ -74,7 +76,7 @@ class RestrictedDemoBackend:
 
 
 async def demonstrate(live=False, accept_mock=False):
-    load_dotenv(PROJECT/'.env')
+    load_dotenv(ENV_FILE)
     if live and accept_mock:raise ValueError('--accept-mock нельзя использовать с --live')
     suffix=datetime.now(timezone(timedelta(hours=10))).strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]
     fund='demo@example.invalid/Мой Фонд'
@@ -86,7 +88,7 @@ async def demonstrate(live=False, accept_mock=False):
     for args in plan['imports']:validate(args['ir_json'])
     backend=RestrictedDemoBackend(HttpBackend() if live else MockBackend(),plan)
     report={'mode':'live' if live else 'mock','paths':plan['paths'],'events':[],'status':'prepared'}
-    directory=PROJECT/'logs'/('demo-'+suffix)
+    directory=LOGS/('demo-'+suffix)
     directory.mkdir(parents=True)
     manifest=directory/'manifest.json'
     manifest.write_text(json.dumps(plan,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -101,7 +103,7 @@ async def demonstrate(live=False, accept_mock=False):
     print('SHA-256: '+checksum,flush=True)
     print('Новые пути: '+json.dumps(plan['paths'],ensure_ascii=False),flush=True)
     print('Данные: MCP-сервер (2), Веб-агент (3); статус «учебный пример».\nИзменение: статус Веб-агента → «демонстрация пройдена».',flush=True)
-    async with Client(build_server(backend=backend,known_paths=plan['paths'],allow_write=True)) as client:
+    async with Client(build_server(backend=backend,known_paths=plan['paths'],allow_write=True,write_roots=['АТЛАС демо']), elicitation_callback=elicitation_handler(lambda preview: True)) as client:
         async def invoke(name,args):
             result=await client.call_tool(name,args)
             if result.is_error:
@@ -159,9 +161,9 @@ async def demonstrate(live=False, accept_mock=False):
 
 async def inspect_resources(manifest):
     """Read an existing demonstration without imports, updates, LLM or new resources."""
-    load_dotenv(PROJECT/'.env')
+    load_dotenv(ENV_FILE)
     plan=json.loads(Path(manifest).read_text(encoding='utf-8'))
-    if len(plan['paths'])!=2 or not all(path.startswith('Загрузки/АТЛАС - ') for path in plan['paths']):
+    if len(plan['paths'])!=2 or not all(path.startswith(('Загрузки/АТЛАС - ', 'АТЛАС демо/АТЛАС - ')) for path in plan['paths']):
         raise ValueError('Нужен манифест двух собственных учебных ресурсов АТЛАС')
     backend=RestrictedDemoBackend(HttpBackend(),plan)
     results=[]

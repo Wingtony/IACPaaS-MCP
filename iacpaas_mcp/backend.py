@@ -34,11 +34,12 @@ def token_expired(token):
 class MockBackend:
     """Changes exist only during this server process."""
     def __init__(self):
+        self.folders = set()
         self.resources = {"Учебные/База наблюдений": json.loads(FIXTURE.read_text(encoding="utf-8"))}
 
     async def export(self, path, depth=None):
         if path not in self.resources:
-            raise ValueError("ИР не найден. Получите пути через list_inforesources")
+            raise PlatformError("ИР не найден. Получите пути через list_inforesources", "resource_not_found", False)
         graph = self.resources[path]
         return capture(copy.deepcopy(graph) if depth is None else clip(graph, depth), path, "mock", depth)
 
@@ -58,6 +59,17 @@ class MockBackend:
             raise ValueError("Учебный режим импортирует только новые ИР; выберите другое title")
         self.resources[path] = resource
         return {"success": True, "path": path}
+
+    async def create_folder(self, args):
+        path = "/".join(filter(None, [args["parent_path"], args["name"]]))
+        if path in self.folders: raise ValueError("Папка уже существует")
+        self.folders.add(path)
+        return {"success": True, "path": path}
+
+    async def delete_resource(self, args):
+        if args["path"] not in self.resources: raise ValueError("Ресурс не найден")
+        del self.resources[args["path"]]
+        return {"success": True, "path": args["path"], "mode": args["mode"]}
 
 
 class HttpBackend:
@@ -118,6 +130,10 @@ class HttpBackend:
                                          transport=self.transport, follow_redirects=False) as client:
                 async with client.stream(method, endpoint, **kwargs) as response:
                     if response.status_code >= 400:
+                        if response.status_code == 404:
+                            raise PlatformError("IACPaaS: ресурс не найден", "resource_not_found", False)
+                        if response.status_code >= 500:
+                            raise PlatformError("IACPaaS временно недоступна", "platform_unavailable", True)
                         if response.status_code in (401,403):
                             auth=response.status_code==401
                             raise PlatformError(f'IACPaaS: HTTP {response.status_code}; требуется вход или доступ',
@@ -130,8 +146,10 @@ class HttpBackend:
                             raise ValueError(f"Экспорт превышает лимит {max_bytes // 1_000_000} МБ")
             result = json.loads(data)
         except httpx.HTTPError:
-            raise ValueError("IACPaaS недоступна или истёк таймаут 60 с") from None
+            raise PlatformError("IACPaaS недоступна или истёк таймаут 60 с", "platform_unavailable", True) from None
         if isinstance(result, dict) and (result.get("success") is False or result.get("platformUnavailable") or result.get("error")):
+            if result.get('platformUnavailable'):
+                raise PlatformError('IACPaaS временно недоступна','platform_unavailable',True)
             import re
             details=' '.join(str(result.get(key,'')) for key in ('error','explanation','message'))
             if endpoint == '/api/data/update' and 'updateVertice' in details and 'action' in details:
@@ -166,3 +184,11 @@ class HttpBackend:
     async def import_resource(self, args):
         return await self.request("POST", "/api/data/import", json={
             "path": args["folder_path"], "json": args["ir_json"], "clearIfExists": args["clear_if_exists"]})
+
+
+    async def create_folder(self, args):
+        return await self.request("POST", "/api/storage-unit/folder/create", json={
+            "path": args["parent_path"], "name": args["name"], "description": args.get("description", "")})
+
+    async def delete_resource(self, args):
+        return await self.request("DELETE", "/api/data/delete", json={"path": args["path"], "mode": args["mode"]})

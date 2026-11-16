@@ -1,0 +1,20 @@
+name: atlas-iacpaas
+services:
+  atlas:
+    build: .
+    init: true
+    env_file: .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      ATLAS_DOCKER: "true"
+      ATLAS_MANAGE_OLLAMA: "false"
+      ATLAS_PASSWORD: ${ATLAS_PASSWORD:?Set ATLAS_PASSWORD in .env (at least 16 characters)}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "${ATLAS_BIND_IP:-0.0.0.0}:8770:8770"
+    volumes:
+      - atlas-data:/data
+    restart: unless-stopped
+volumes:
+  atlas-data:

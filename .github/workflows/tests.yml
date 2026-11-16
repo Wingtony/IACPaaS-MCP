@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [main, 'feature/**']
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -10,8 +10,12 @@ permissions:
   contents: read
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -28,3 +32,27 @@ jobs:
         run: python -m pytest -q
       - name: JavaScript syntax
         run: node --check iacpaas_mcp/static/app.js
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and validate compose
+        run: |
+          cp .env.example .env
+          echo 'ATLAS_PASSWORD=ci-only-password-not-a-secret' >> .env
+          docker compose config --quiet
+          docker compose build
+      - name: Start mock application without model or credentials
+        run: |
+          docker compose up -d --wait --wait-timeout 120 atlas
+          curl --fail --retry 10 --retry-delay 2 http://localhost:8770/api/health
+          curl --fail --user atlas:ci-only-password-not-a-secret http://localhost:8770/api/resources
+      - name: Container diagnostics
+        if: always()
+        run: docker compose logs --tail 100
+      - name: Stop containers
+        if: always()
+        run: docker compose down

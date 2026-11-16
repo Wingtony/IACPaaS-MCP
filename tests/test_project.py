@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 from mcp import Client, StdioServerParameters
+from iacpaas_mcp.confirmation import elicitation_handler
 
 from iacpaas_mcp.backend import HttpBackend, MockBackend
 from iacpaas_mcp.graph import counts, select, validate
@@ -104,7 +105,7 @@ def test_mcp_read_and_errors():
     async def run():
         async with Client(build_server(backend=MockBackend(), allow_write=False)) as client:
             tools = (await client.list_tools()).tools
-            assert len(tools) == 10
+            assert len(tools) == 17
             assert all(tool.description and tool.input_schema for tool in tools)
             result = await client.call_tool("count_graph", {"path": PATH})
             assert not result.is_error
@@ -122,7 +123,7 @@ def test_mcp_read_and_errors():
 def test_write_preview_then_commit():
     async def run():
         backend = MockBackend()
-        async with Client(build_server(backend=backend, allow_write=True)) as client:
+        async with Client(build_server(backend=backend, allow_write=True), elicitation_callback=elicitation_handler(lambda preview: True)) as client:
             args = dict(path=PATH, concept_path="Основные жалобы", metaconcept_path="Группа", mark="Изменено")
             preview = (await client.call_tool("update_concept", args)).structured_content
             assert preview["status"] == "pending_confirmation"
@@ -137,7 +138,7 @@ def test_write_preview_then_commit():
 def test_import_preview_then_commit():
     async def run():
         backend = MockBackend()
-        async with Client(build_server(backend=backend, allow_write=True)) as client:
+        async with Client(build_server(backend=backend, allow_write=True), elicitation_callback=elicitation_handler(lambda preview: True)) as client:
             args = {"folder_path": "Учебные", "ir_json": '{"title":"Новая база","type":"КОРЕНЬ"}'}
             preview = (await client.call_tool("import_inforesource", args)).structured_content
             assert "Учебные/Новая база" not in backend.resources
@@ -185,7 +186,7 @@ def test_stdio_real_subprocess():
         params = StdioServerParameters(command=sys.executable, args=["-m", "iacpaas_mcp.server"],
                                        cwd=str(Path(__file__).resolve().parent.parent), env=env)
         async with Client(params) as client:
-            assert len((await client.list_tools()).tools) == 10
+            assert len((await client.list_tools()).tools) == 17
             assert (await client.call_tool("count_graph", {"path": PATH})).structured_content["edges"] == 8
     asyncio.run(run())
 
@@ -209,7 +210,7 @@ def test_agent_human_confirmation(monkeypatch, tmp_path, approved):
         previews.append(data)
         return approved
     async def run():
-        async with Client(build_server(backend=backend, allow_write=True)) as client:
+        async with Client(build_server(backend=backend, allow_write=True), elicitation_callback=elicitation_handler(approve)) as client:
             answer = await run_agent(client, "Переименовать", "test", "http://ollama.test", tmp_path / "trace.jsonl", approve=approve, mode="raw")
             assert answer == ("Изменение выполнено." if approved else "Изменение отменено пользователем.")
         graph = await backend.export(PATH)

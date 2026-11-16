@@ -1,8 +1,9 @@
 {
+  "inputs": [{"id":"atlasPython","type":"promptString","description":"Python проекта: .venv/Scripts/python.exe (Windows) или .venv/bin/python (Unix)","default":"python"}],
   "servers": {
     "iacpaas": {
       "type": "stdio",
-      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "command": "${input:atlasPython}",
       "args": ["-m", "iacpaas_mcp.server"],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env"

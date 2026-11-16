@@ -10,9 +10,10 @@ import httpx
 
 from .credentials import protect
 
-SETTINGS_FILE = Path(__file__).resolve().parents[1] / ".local" / "llm.dpapi"
+from .paths import DATA
+SETTINGS_FILE = DATA / "llm.dpapi"
 PROVIDERS = {
-    "ollama": {"name": "Локальная Qwen · Ollama", "models": ["qwen-agent"], "env": "", "url": ""},
+    "ollama": {"name": "Ollama · ваш сервер", "models": ["qwen-agent"], "env": "", "url": ""},
     "openai": {"name": "OpenAI", "models": ["gpt-4.1-mini", "gpt-4.1"], "env": "OPENAI_API_KEY", "url": "https://api.openai.com/v1"},
     "anthropic": {"name": "Anthropic · Claude", "models": ["claude-haiku-4-5", "claude-sonnet-4-5"], "env": "ANTHROPIC_API_KEY", "url": "https://api.anthropic.com/v1"},
     "gemini": {"name": "Google · Gemini", "models": ["gemini-3.8-flash", "gemini-2.5-flash"], "env": "GEMINI_API_KEY", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
@@ -26,10 +27,16 @@ class ModelConfig:
     provider: str
     model: str
     api_key: str = field(default="", repr=False)
+    endpoint: str = ""
 
     @property
     def cloud(self):
         return self.provider != "ollama"
+
+    @property
+    def ollama_url(self):
+        from .paths import ollama_url
+        return self.endpoint or ollama_url()
 
 
 def load_settings():
@@ -38,7 +45,19 @@ def load_settings():
     try:
         return json.loads(protect(SETTINGS_FILE.read_bytes(), decrypt=True).decode("utf-8"))
     except (OSError, ValueError):
-        raise ValueError("Не удалось прочитать настройки моделей в хранилище Windows") from None
+        raise ValueError("Не удалось прочитать локальное хранилище настроек моделей") from None
+
+
+def validate_ollama_url(value):
+    from urllib.parse import urlsplit
+    if not isinstance(value,str) or len(value)>500 or any(c.isspace() for c in value):
+        raise ValueError("Укажите HTTP(S)-адрес Ollama")
+    url=urlsplit(value)
+    try: port=url.port
+    except ValueError: raise ValueError("Неверный порт Ollama") from None
+    if url.scheme not in {"http","https"} or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in {"", "/"}:
+        raise ValueError("Нужен адрес Ollama вида http://192.168.1.50:11434 без пароля, пути и параметров")
+    return value.rstrip("/")
 
 
 def validate_choice(provider, model):
@@ -57,13 +76,13 @@ def get_config(default_model=None, provider=None, model=None):
         default_model or os.getenv("OLLAMA_MODEL", "qwen-agent") if selected == "ollama" else PROVIDERS[selected]["models"][0])
     validate_choice(selected, chosen)
     key = os.getenv(PROVIDERS[selected]["env"], "") or settings.get("keys", {}).get(selected, "")
-    return ModelConfig(selected, chosen, key)
+    return ModelConfig(selected, chosen, key, settings.get("ollama_url", ""))
 
 
 def public_settings(default_model=None):
     settings = load_settings()
     selected = get_config(default_model)
-    return {"provider": selected.provider, "model": selected.model, "cloud": selected.cloud,
+    return {"provider": selected.provider, "model": selected.model, "cloud": selected.cloud, "ollama_url": selected.ollama_url,
             "providers": [{"id": key, "name": value["name"], "models": value["models"],
                            "saved_model": settings.get("models", {}).get(key, ""),
                            "key_source": "environment" if value["env"] and os.getenv(value["env"]) else "saved" if settings.get("keys", {}).get(key) else "none",
@@ -72,7 +91,7 @@ def public_settings(default_model=None):
 
 
 def save_settings(data):
-    if not isinstance(data, dict) or set(data) - {"provider", "model", "api_key", "delete_key"}:
+    if not isinstance(data, dict) or set(data) - {"provider", "model", "api_key", "delete_key", "ollama_url"}:
         raise ValueError("Некорректные настройки модели")
     provider, model = data.get("provider"), data.get("model")
     validate_choice(provider, model)
@@ -84,6 +103,8 @@ def save_settings(data):
     if key and data.get("delete_key"):
         raise ValueError("Нельзя одновременно заменить и удалить ключ")
     settings = load_settings()
+    if "ollama_url" in data:
+        settings["ollama_url"] = validate_ollama_url(data["ollama_url"])
     settings["provider"] = provider
     settings.setdefault("models", {})[provider] = model
     if data.get("delete_key"):
@@ -94,6 +115,7 @@ def save_settings(data):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     temp = SETTINGS_FILE.with_suffix(".tmp")
     temp.write_bytes(encrypted)
+    if os.name != "nt": temp.chmod(0o600)
     temp.replace(SETTINGS_FILE)
 
 

@@ -33,7 +33,7 @@ def test_demo_blocks_changes_outside_the_exact_manifest():
 
 def test_full_mock_demo_preserves_original_fixture_and_no_capabilities_in_report(tmp_path,monkeypatch):
     backend=MockBackend();before=copy.deepcopy(backend.resources)
-    monkeypatch.setattr(demo,'PROJECT',tmp_path)
+    monkeypatch.setattr(demo,'LOGS',tmp_path/'logs')
     monkeypatch.setattr(demo,'MockBackend',lambda:backend)
     directory=asyncio.run(demo.demonstrate(accept_mock=True))
     report=json.loads((directory/'report.json').read_text(encoding='utf-8'))
@@ -52,7 +52,7 @@ def test_noninteractive_mock_consent_is_never_accepted_for_live():
 def test_demo_reports_import_success_but_never_claims_failed_update_passed(tmp_path,monkeypatch):
     class FailingUpdate(MockBackend):
         async def update(self,args):raise ValueError('Platform update unavailable')
-    monkeypatch.setattr(demo,'PROJECT',tmp_path)
+    monkeypatch.setattr(demo,'LOGS',tmp_path/'logs')
     monkeypatch.setattr(demo,'MockBackend',FailingUpdate)
     directory=asyncio.run(demo.demonstrate(accept_mock=True))
     report=json.loads((directory/'report.json').read_text(encoding='utf-8'))

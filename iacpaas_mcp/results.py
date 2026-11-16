@@ -11,6 +11,10 @@ class Source(TypedDict):
     retrieved_at: str
     export_depth: int | None
     snapshot: str
+    served_from: NotRequired[str]
+    stale: NotRequired[bool]
+    fallback_reason: NotRequired[str]
+    checked_at: NotRequired[str]
 
 
 class Graph(TypedDict, total=False):
@@ -40,6 +44,25 @@ class Counts(TypedDict):
 class Subgraph(TypedDict):
     graph: Graph
     depth: int
+    _source: Source
+
+
+class Child(TypedDict):
+    graph: Graph
+    path: str
+    has_children: bool
+    is_link: bool
+
+
+class ChildrenPage(TypedDict):
+    parent: Graph
+    root: str
+    children: list[Child]
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
+    next_offset: int | None
     _source: Source
 
 
@@ -116,7 +139,7 @@ class ValidationResult(Counts):
 
 
 class WriteResult(TypedDict):
-    status: Literal['pending_confirmation', 'done']
+    status: Literal['pending_confirmation', 'done', 'cancelled']
     operation: NotRequired[str]
     preview: NotRequired[dict[str, Any]]
     confirm_token: NotRequired[str]
@@ -133,3 +156,11 @@ class Diagnostic(TypedDict):
 
 class ErrorResult(TypedDict):
     error: Diagnostic
+
+
+class IndexStatus(TypedDict):
+    resources: list[dict[str, Any]]
+
+
+class SyncResult(IndexStatus):
+    complete: bool
